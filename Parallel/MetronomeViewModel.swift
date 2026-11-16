@@ -13,7 +13,11 @@ final class MetronomeViewModel: ObservableObject {
     private let engine: MetronomeEngineProtocol
     private let coordinator: AudioSessionCoordinator
 
-    init(engine: MetronomeEngineProtocol = MetronomeEngine()) {
+    convenience init() {
+        self.init(engine: MetronomeEngine())
+    }
+
+    init(engine: MetronomeEngineProtocol) {
         self.engine = engine
         self.coordinator = AudioSessionCoordinator(engine: engine)
         coordinator.onStateChange = { [weak self] state in
