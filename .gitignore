@@ -1,0 +1,22 @@
+# Xcode user state and build output
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+*.xcresult
+*.ipa
+*.dSYM.zip
+
+# Signing material and secrets (never commit)
+*.p12
+*.mobileprovision
+*.cer
+*.key
+*.pem
+.env
+.env.*
+
+# Windows/macOS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini

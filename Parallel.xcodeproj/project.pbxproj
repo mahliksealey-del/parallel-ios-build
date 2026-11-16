@@ -1,0 +1,183 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		100000000000000000000001 /* ParallelApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000001 /* ParallelApp.swift */; };
+		100000000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000002 /* ContentView.swift */; };
+		100000000000000000000003 /* LaunchStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* LaunchStatus.swift */; };
+		100000000000000000000004 /* ParallelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000004 /* ParallelTests.swift */; };
+		100000000000000000000005 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000000000000000000005 /* XCTest.framework */; };
+		100000000000000000000006 /* AudioSessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000008 /* AudioSessionCoordinator.swift */; };
+		100000000000000000000007 /* MetronomeViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000009 /* MetronomeViewModel.swift */; };
+		100000000000000000000008 /* MetronomeTiming.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000010 /* MetronomeTiming.swift */; };
+		100000000000000000000009 /* MetronomeEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000011 /* MetronomeEngine.swift */; };
+		100000000000000000000010 /* MetronomeEngine.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000000000000000000012 /* MetronomeEngine.framework */; };
+		100000000000000000000011 /* MetronomeTimingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000013 /* MetronomeTimingTests.swift */; };
+		100000000000000000000012 /* MetronomeEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000014 /* MetronomeEngineTests.swift */; };
+		100000000000000000000013 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000000000000000000005 /* XCTest.framework */; };
+		100000000000000000000014 /* MetronomeEngine.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000000000000000000012 /* MetronomeEngine.framework */; };
+		100000000000000000000015 /* MetronomeEngine.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000000000000000000012 /* MetronomeEngine.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		300000000000000000000001 = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 400000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 500000000000000000000001;
+			remoteInfo = Parallel;
+		};
+		300000000000000000000002 = {isa = PBXContainerItemProxy; containerPortal = 400000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = 500000000000000000000003; remoteInfo = MetronomeEngine; };
+		300000000000000000000003 = {isa = PBXContainerItemProxy; containerPortal = 400000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = 500000000000000000000003; remoteInfo = MetronomeEngine; };
+		300000000000000000000004 = {isa = PBXContainerItemProxy; containerPortal = 400000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = 500000000000000000000003; remoteInfo = MetronomeEngine; };
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		200000000000000000000001 /* ParallelApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParallelApp.swift; sourceTree = "<group>"; };
+		200000000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		200000000000000000000003 /* LaunchStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchStatus.swift; sourceTree = "<group>"; };
+		200000000000000000000004 /* ParallelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParallelTests.swift; sourceTree = "<group>"; };
+		200000000000000000000005 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = Platforms/iPhoneSimulator.platform/Developer/Library/Frameworks/XCTest.framework; sourceTree = DEVELOPER_DIR; };
+		200000000000000000000006 /* Parallel.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Parallel.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		200000000000000000000007 /* ParallelTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ParallelTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		200000000000000000000008 /* AudioSessionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSessionCoordinator.swift; sourceTree = "<group>"; };
+		200000000000000000000009 /* MetronomeViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetronomeViewModel.swift; sourceTree = "<group>"; };
+		200000000000000000000010 /* MetronomeTiming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetronomeTiming.swift; sourceTree = "<group>"; };
+		200000000000000000000011 /* MetronomeEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetronomeEngine.swift; sourceTree = "<group>"; };
+		200000000000000000000012 /* MetronomeEngine.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = MetronomeEngine.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		200000000000000000000013 /* MetronomeTimingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetronomeTimingTests.swift; sourceTree = "<group>"; };
+		200000000000000000000014 /* MetronomeEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetronomeEngineTests.swift; sourceTree = "<group>"; };
+		200000000000000000000015 /* MetronomeEngineTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MetronomeEngineTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		600000000000000000000001 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000010 /* MetronomeEngine.framework in Frameworks */,); runOnlyForDeploymentPostprocessing = 0; };
+		600000000000000000000002 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000005 /* XCTest.framework in Frameworks */, 100000000000000000000015 /* MetronomeEngine.framework in Frameworks */,); runOnlyForDeploymentPostprocessing = 0; };
+		600000000000000000000003 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		600000000000000000000004 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000013 /* XCTest.framework in Frameworks */, 100000000000000000000014 /* MetronomeEngine.framework in Frameworks */,); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		700000000000000000000001 = {
+			isa = PBXGroup;
+			children = (700000000000000000000002 /* Parallel */, 700000000000000000000003 /* ParallelTests */, 700000000000000000000006 /* MetronomeEngine */, 700000000000000000000007 /* MetronomeEngineTests */, 700000000000000000000004 /* Frameworks */, 700000000000000000000005 /* Products */);
+			sourceTree = "<group>";
+		};
+		700000000000000000000002 /* Parallel */ = {isa = PBXGroup; path = Parallel; sourceTree = "<group>"; children = (200000000000000000000001, 200000000000000000000002, 200000000000000000000003, 200000000000000000000008, 200000000000000000000009); };
+		700000000000000000000003 /* ParallelTests */ = {isa = PBXGroup; path = ParallelTests; sourceTree = "<group>"; children = (200000000000000000000004); };
+		700000000000000000000004 /* Frameworks */ = {isa = PBXGroup; children = (200000000000000000000005); name = Frameworks; sourceTree = "<group>"; };
+		700000000000000000000005 /* Products */ = {isa = PBXGroup; children = (200000000000000000000006, 200000000000000000000007, 200000000000000000000012, 200000000000000000000015); name = Products; sourceTree = "<group>"; };
+		700000000000000000000006 /* MetronomeEngine */ = {isa = PBXGroup; path = MetronomeEngine; sourceTree = "<group>"; children = (200000000000000000000010, 200000000000000000000011); };
+		700000000000000000000007 /* MetronomeEngineTests */ = {isa = PBXGroup; path = MetronomeEngineTests; sourceTree = "<group>"; children = (200000000000000000000013, 200000000000000000000014); };
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		500000000000000000000001 /* Parallel */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 800000000000000000000001;
+			buildPhases = (900000000000000000000001 /* Sources */, 600000000000000000000001 /* Frameworks */, A00000000000000000000001 /* Resources */);
+			buildRules = ();
+			dependencies = (B00000000000000000000002);
+			name = Parallel;
+			productName = Parallel;
+			productReference = 200000000000000000000006;
+			productType = "com.apple.product-type.application";
+		};
+		500000000000000000000002 /* ParallelTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 800000000000000000000002;
+			buildPhases = (900000000000000000000002 /* Sources */, 600000000000000000000002 /* Frameworks */, A00000000000000000000002 /* Resources */);
+			buildRules = ();
+			dependencies = (B00000000000000000000001, B00000000000000000000003);
+			name = ParallelTests;
+			productName = ParallelTests;
+			productReference = 200000000000000000000007;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		500000000000000000000003 /* MetronomeEngine */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 800000000000000000000004;
+			buildPhases = (900000000000000000000003 /* Sources */, 600000000000000000000003 /* Frameworks */);
+			buildRules = ();
+			dependencies = ();
+			name = MetronomeEngine;
+			productName = MetronomeEngine;
+			productReference = 200000000000000000000012 /* MetronomeEngine.framework */;
+			productType = "com.apple.product-type.framework";
+		};
+		500000000000000000000004 /* MetronomeEngineTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 800000000000000000000005;
+			buildPhases = (900000000000000000000004 /* Sources */, 600000000000000000000004 /* Frameworks */);
+			buildRules = ();
+			dependencies = (B00000000000000000000004);
+			name = MetronomeEngineTests;
+			productName = MetronomeEngineTests;
+			productReference = 200000000000000000000015 /* MetronomeEngineTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		400000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {BuildIndependentTargetsInParallel = 1; LastSwiftUpdateCheck = 1640; LastUpgradeCheck = 1640; TargetAttributes = {500000000000000000000001 = {CreatedOnToolsVersion = 16.4;}; 500000000000000000000002 = {CreatedOnToolsVersion = 16.4; TestTargetID = 500000000000000000000001;}; 500000000000000000000003 = {CreatedOnToolsVersion = 16.4;}; 500000000000000000000004 = {CreatedOnToolsVersion = 16.4;};};};
+			buildConfigurationList = 800000000000000000000003;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (en, Base);
+			mainGroup = 700000000000000000000001;
+			productRefGroup = 700000000000000000000005;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (500000000000000000000001, 500000000000000000000002, 500000000000000000000003, 500000000000000000000004);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A00000000000000000000001 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		A00000000000000000000002 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		900000000000000000000001 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000001, 100000000000000000000002, 100000000000000000000003, 100000000000000000000006, 100000000000000000000007); runOnlyForDeploymentPostprocessing = 0; };
+		900000000000000000000002 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000004); runOnlyForDeploymentPostprocessing = 0; };
+		900000000000000000000003 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000008, 100000000000000000000009); runOnlyForDeploymentPostprocessing = 0; };
+		900000000000000000000004 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000011, 100000000000000000000012); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		B00000000000000000000001 = {isa = PBXTargetDependency; target = 500000000000000000000001; targetProxy = 300000000000000000000001; };
+		B00000000000000000000002 = {isa = PBXTargetDependency; target = 500000000000000000000003; targetProxy = 300000000000000000000002; };
+		B00000000000000000000003 = {isa = PBXTargetDependency; target = 500000000000000000000003; targetProxy = 300000000000000000000003; };
+		B00000000000000000000004 = {isa = PBXTargetDependency; target = 500000000000000000000003; targetProxy = 300000000000000000000004; };
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		C00000000000000000000001 = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; COPY_PHASE_STRIP = NO; DEBUG_INFORMATION_FORMAT = dwarf; ENABLE_TESTABILITY = YES; GCC_C_LANGUAGE_STANDARD = gnu17; GCC_OPTIMIZATION_LEVEL = 0; IPHONEOS_DEPLOYMENT_TARGET = 16.0; ONLY_ACTIVE_ARCH = YES; SDKROOT = iphoneos; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)"; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; SWIFT_VERSION = 5.0; }; name = Debug; };
+		C00000000000000000000002 = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; COPY_PHASE_STRIP = NO; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; ENABLE_NS_ASSERTIONS = NO; GCC_C_LANGUAGE_STANDARD = gnu17; IPHONEOS_DEPLOYMENT_TARGET = 16.0; SDKROOT = iphoneos; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_OPTIMIZATION_LEVEL = "-O"; SWIFT_VERSION = 5.0; VALIDATE_PRODUCT = YES; }; name = Release; };
+		C00000000000000000000003 = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = ""; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = Parallel; INFOPLIST_KEY_LSRequiresIPhoneOS = YES; INFOPLIST_KEY_UIBackgroundModes = audio; INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES; INFOPLIST_KEY_UILaunchScreen_Generation = YES; INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait; MARKETING_VERSION = 0.2.0; PRODUCT_BUNDLE_IDENTIFIER = com.example.parallel.phase0; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; SWIFT_EMIT_LOC_STRINGS = YES; TARGETED_DEVICE_FAMILY = 1; }; name = Debug; };
+		C00000000000000000000004 = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = ""; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = Parallel; INFOPLIST_KEY_LSRequiresIPhoneOS = YES; INFOPLIST_KEY_UIBackgroundModes = audio; INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES; INFOPLIST_KEY_UILaunchScreen_Generation = YES; INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait; MARKETING_VERSION = 0.2.0; PRODUCT_BUNDLE_IDENTIFIER = com.example.parallel.phase0; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; SWIFT_EMIT_LOC_STRINGS = YES; TARGETED_DEVICE_FAMILY = 1; }; name = Release; };
+		C00000000000000000000005 = {isa = XCBuildConfiguration; buildSettings = {BUNDLE_LOADER = "$(TEST_HOST)"; CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 16.0; PRODUCT_BUNDLE_IDENTIFIER = com.example.parallel.phase0.tests; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = 1; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Parallel.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Parallel"; }; name = Debug; };
+		C00000000000000000000006 = {isa = XCBuildConfiguration; buildSettings = {BUNDLE_LOADER = "$(TEST_HOST)"; CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 16.0; PRODUCT_BUNDLE_IDENTIFIER = com.example.parallel.phase0.tests; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = 1; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Parallel.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Parallel"; }; name = Release; };
+		C00000000000000000000007 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; DEFINES_MODULE = YES; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 16.0; MACH_O_TYPE = staticlib; PRODUCT_BUNDLE_IDENTIFIER = com.example.parallel.metronomeengine; PRODUCT_NAME = "$(TARGET_NAME)"; SKIP_INSTALL = YES; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = 1; }; name = Debug; };
+		C00000000000000000000008 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; DEFINES_MODULE = YES; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 16.0; MACH_O_TYPE = staticlib; PRODUCT_BUNDLE_IDENTIFIER = com.example.parallel.metronomeengine; PRODUCT_NAME = "$(TARGET_NAME)"; SKIP_INSTALL = YES; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = 1; }; name = Release; };
+		C00000000000000000000009 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 16.0; PRODUCT_BUNDLE_IDENTIFIER = com.example.parallel.metronomeengine.tests; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphonesimulator"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = 1; }; name = Debug; };
+		C00000000000000000000010 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 16.0; PRODUCT_BUNDLE_IDENTIFIER = com.example.parallel.metronomeengine.tests; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphonesimulator"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = 1; }; name = Release; };
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		800000000000000000000001 = {isa = XCConfigurationList; buildConfigurations = (C00000000000000000000003, C00000000000000000000004); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		800000000000000000000002 = {isa = XCConfigurationList; buildConfigurations = (C00000000000000000000005, C00000000000000000000006); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		800000000000000000000003 = {isa = XCConfigurationList; buildConfigurations = (C00000000000000000000001, C00000000000000000000002); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		800000000000000000000004 = {isa = XCConfigurationList; buildConfigurations = (C00000000000000000000007, C00000000000000000000008); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		800000000000000000000005 = {isa = XCConfigurationList; buildConfigurations = (C00000000000000000000009, C00000000000000000000010); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End XCConfigurationList section */
+	};
+	rootObject = 400000000000000000000001 /* Project object */;
+}
