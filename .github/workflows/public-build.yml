@@ -23,19 +23,19 @@ jobs:
           xcodebuild -version
           xcodebuild -showsdks
 
-      - name: Validate project and shared scheme
-        run: xcodebuild -project Parallel.xcodeproj -list
-
-      - name: Run engine and integration tests
+      - name: Initialize and inspect simulator services
         run: |
           set -euo pipefail
-          xcodebuild test \
+          xcrun simctl list > /dev/null
+          xcrun simctl list runtimes
+          xcrun simctl list devices available
+          xcodebuild \
             -project Parallel.xcodeproj \
             -scheme Parallel \
-            -configuration Debug \
-            -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=18.5' \
-            -derivedDataPath DerivedData \
-            CODE_SIGNING_ALLOWED=NO
+            -showdestinations
+
+      - name: Validate project and shared scheme
+        run: xcodebuild -project Parallel.xcodeproj -list
 
       - name: Build unsigned ARM64 iPhone app
         run: |
@@ -70,6 +70,68 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes' "$PLIST"
           /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes:0' "$PLIST" | grep -Fx audio
 
+      - name: Select an available iOS simulator
+        run: |
+          set -euo pipefail
+          DEVICES_JSON="$(mktemp)"
+          trap 'rm -f "$DEVICES_JSON"' EXIT
+          xcrun simctl list devices available -j > "$DEVICES_JSON"
+
+          SELECTED="$(jq -r '
+            [(.devices["com.apple.CoreSimulator.SimRuntime.iOS-18-5"] // [])[]
+              | select((.isAvailable // true) == true and .name == "iPhone 16 Pro")
+              | [.udid, .name, "com.apple.CoreSimulator.SimRuntime.iOS-18-5"]]
+            | first // empty
+            | @tsv
+          ' "$DEVICES_JSON")"
+
+          if [[ -z "$SELECTED" ]]; then
+            SELECTED="$(jq -r '
+              [.devices | to_entries[] as $runtime
+                | $runtime.value[]
+                | select((.isAvailable // true) == true and .name == "iPhone 16 Pro")
+                | {udid: .udid, name: .name, runtime: $runtime.key}]
+              | sort_by(.runtime) | reverse | first // empty
+              | [.udid, .name, .runtime] | @tsv
+            ' "$DEVICES_JSON")"
+          fi
+
+          if [[ -z "$SELECTED" ]]; then
+            SELECTED="$(jq -r '
+              [.devices | to_entries[] as $runtime
+                | select($runtime.key | startswith("com.apple.CoreSimulator.SimRuntime.iOS-"))
+                | $runtime.value[]
+                | select((.isAvailable // true) == true and (.name | startswith("iPhone")))
+                | {udid: .udid, name: .name, runtime: $runtime.key}]
+              | sort_by(.runtime) | reverse | first // empty
+              | [.udid, .name, .runtime] | @tsv
+            ' "$DEVICES_JSON")"
+          fi
+
+          if [[ -z "$SELECTED" ]]; then
+            echo 'No available iOS simulator was discovered after CoreSimulator initialization.' >&2
+            exit 1
+          fi
+
+          IFS=$'\t' read -r SIMULATOR_UDID SIMULATOR_NAME SIMULATOR_RUNTIME <<< "$SELECTED"
+          echo "Selected simulator: $SIMULATOR_NAME ($SIMULATOR_RUNTIME, $SIMULATOR_UDID)"
+          echo "SIMULATOR_UDID=$SIMULATOR_UDID" >> "$GITHUB_ENV"
+          echo "SIMULATOR_NAME=$SIMULATOR_NAME" >> "$GITHUB_ENV"
+          echo "SIMULATOR_RUNTIME=$SIMULATOR_RUNTIME" >> "$GITHUB_ENV"
+
+      - name: Run engine and integration tests
+        run: |
+          set -euo pipefail
+          test -n "$SIMULATOR_UDID"
+          xcodebuild test \
+            -project Parallel.xcodeproj \
+            -scheme Parallel \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath DerivedData \
+            CODE_SIGNING_ALLOWED=NO
+
       - name: Package and record provenance
         run: |
           set -euo pipefail
@@ -85,6 +147,8 @@ jobs:
             echo "run_attempt=$GITHUB_RUN_ATTEMPT"
             echo "runner_image=macos-15"
             echo "developer_dir=$DEVELOPER_DIR"
+            echo "simulator_name=$SIMULATOR_NAME"
+            echo "simulator_runtime=$SIMULATOR_RUNTIME"
             echo "ipa_file=Parallel-unsigned.ipa"
             echo "ipa_sha256=$IPA_SHA256"
             echo "workflow_sha256=$(shasum -a 256 .github/workflows/public-build.yml | awk '{print $1}')"
