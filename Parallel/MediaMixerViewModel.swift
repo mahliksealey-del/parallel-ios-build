@@ -145,7 +145,7 @@ final class MediaMixerViewModel: ObservableObject, AudioPlaybackSource {
 
             let nextItem = AVPlayerItem(asset: asset)
             let nextPlayer = AVPlayer(playerItem: nextItem)
-            configureForBackgroundPlayback(nextPlayer)
+            Self.configureForBackgroundPlayback(nextPlayer)
             nextPlayer.volume = Float(volume)
 
             coordinator?.stopPlayback(for: sourceID)
