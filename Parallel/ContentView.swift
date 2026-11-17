@@ -7,12 +7,13 @@ struct ContentView: View {
     @ObservedObject var model: MetronomeViewModel
     @ObservedObject var media: MediaMixerViewModel
     @State private var showingFileImporter = false
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Video 1 · MediaMixer") {
-                    VideoSurface(player: media.player)
+                    VideoSurface(player: media.player, isForeground: scenePhase == .active)
                         .frame(height: 210)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                         .accessibilityIdentifier("media-preview-1")
@@ -118,19 +119,29 @@ struct ContentView: View {
 // AudioSessionCoordinator. Playback starts only via our own transport button.
 struct VideoSurface: UIViewRepresentable {
     let player: AVPlayer?
+    let isForeground: Bool
 
     func makeUIView(context: Context) -> PlayerCanvas {
         PlayerCanvas()
     }
 
     func updateUIView(_ view: PlayerCanvas, context: Context) {
-        view.playerLayer.player = player
+        view.updatePresentation(player: player, isForeground: isForeground)
     }
 }
 
 final class PlayerCanvas: UIView {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
     var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+
+    // Disconnect the display, not the AVPlayer. The audio transport keeps
+    // running under the shared AVAudioSession when iOS backgrounds the app.
+    func updatePresentation(player: AVPlayer?, isForeground: Bool) {
+        let desiredPlayer = isForeground ? player : nil
+        if playerLayer.player !== desiredPlayer {
+            playerLayer.player = desiredPlayer
+        }
+    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)

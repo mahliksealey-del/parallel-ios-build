@@ -90,6 +90,12 @@ final class MediaMixerViewModel: ObservableObject, AudioPlaybackSource {
 
     var hasVideo: Bool { player != nil }
 
+    // Video presentation is detached when the app becomes inactive, so
+    // AVPlayer should retain its audio transport while in the background.
+    static func configureForBackgroundPlayback(_ player: AVPlayer) {
+        player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
+    }
+
     func togglePlayback() {
         guard let coordinator else { return }
         if coordinator.requestedSources.contains(sourceID) {
@@ -139,6 +145,7 @@ final class MediaMixerViewModel: ObservableObject, AudioPlaybackSource {
 
             let nextItem = AVPlayerItem(asset: asset)
             let nextPlayer = AVPlayer(playerItem: nextItem)
+            configureForBackgroundPlayback(nextPlayer)
             nextPlayer.volume = Float(volume)
 
             coordinator?.stopPlayback(for: sourceID)

@@ -1,3 +1,4 @@
+import AVFoundation
 import XCTest
 @testable import Parallel
 
@@ -41,6 +42,24 @@ final class ParallelTests: XCTestCase {
     func testManagedVideoStoreRejectsUnsupportedFileType() {
         let input = URL(fileURLWithPath: "/tmp/test-audio-only.txt")
         XCTAssertThrowsError(try ManagedVideoFileStore.copy(from: input))
+    }
+
+    func testVideoPlayerRequestsBackgroundAudioContinuation() {
+        let player = AVPlayer()
+        player.audiovisualBackgroundPlaybackPolicy = .pauses
+        MediaMixerViewModel.configureForBackgroundPlayback(player)
+        XCTAssertEqual(player.audiovisualBackgroundPlaybackPolicy, .continuesIfPossible)
+    }
+
+    func testVideoSurfaceDisconnectsDisplayWithoutReplacingPlayer() {
+        let canvas = PlayerCanvas(frame: .zero)
+        let player = AVPlayer()
+        canvas.updatePresentation(player: player, isForeground: true)
+        XCTAssertTrue(canvas.playerLayer.player === player)
+        canvas.updatePresentation(player: player, isForeground: false)
+        XCTAssertNil(canvas.playerLayer.player)
+        canvas.updatePresentation(player: player, isForeground: true)
+        XCTAssertTrue(canvas.playerLayer.player === player)
     }
 
     func testLaunchStatusMessage() {
