@@ -1,19 +1,28 @@
 import SwiftUI
 import MetronomeEngine
 
-// Single lifetime owner for all Parallel audio sources. The MediaMixer view
-// model will receive this same session instance in a later phase.
+// App lifetime owns one audio session shared by the metronome and MediaMixer.
 @MainActor
 final class ParallelAudioContainer: ObservableObject {
     let session: AudioSessionCoordinator
     let metronome: MetronomeViewModel
+    let media: MediaMixerViewModel
 
     init() {
         let engine = MetronomeEngine()
         let graph = AudioGraphCoordinator(metronome: engine)
         let coordinator = AudioSessionCoordinator(graph: graph)
+        let video = MediaMixerViewModel(coordinator: coordinator)
+
         session = coordinator
         metronome = MetronomeViewModel(engine: engine, coordinator: coordinator)
+        media = video
+
+        coordinator.onSourceError = { [weak video] source, message in
+            if source == .media(0) {
+                video?.reportError(message)
+            }
+        }
     }
 }
 
@@ -23,7 +32,7 @@ struct ParallelApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(model: audio.metronome)
+            ContentView(model: audio.metronome, media: audio.media)
         }
     }
 }

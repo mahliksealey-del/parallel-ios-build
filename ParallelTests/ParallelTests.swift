@@ -8,6 +8,41 @@ final class ParallelTests: XCTestCase {
         XCTAssertTrue(container.metronome.coordinator === container.session)
     }
 
+    func testAppRootSharesSessionWithFirstMediaMixer() {
+        let container = ParallelAudioContainer()
+        XCTAssertTrue(container.metronome.coordinator === container.session)
+        XCTAssertFalse(container.media.hasVideo)
+        XCTAssertTrue(container.session.requestedSources.isEmpty)
+        // First media slot is registered by the root container.
+        XCTAssertFalse(container.session.register(FakeSource(), for: .media(0)))
+    }
+
+    func testMediaMixerRequiresImportedFileBeforePlayback() {
+        let f = makeFixture()
+        let media = MediaMixerViewModel(coordinator: f.coordinator)
+        media.togglePlayback()
+        XCTAssertNotNil(media.errorMessage)
+        XCTAssertFalse(media.isPlaying)
+        XCTAssertEqual(f.session.activateCount, 0)
+        XCTAssertTrue(f.coordinator.requestedSources.isEmpty)
+    }
+
+    func testMediaMixerRejectsInvalidVolumeInput() {
+        let f = makeFixture()
+        let media = MediaMixerViewModel(coordinator: f.coordinator)
+        media.volume = 1.5
+        media.applyVolume()
+        XCTAssertNotNil(media.errorMessage)
+        media.volume = 0.3
+        media.applyVolume()
+        XCTAssertEqual(media.volume, 0.3, accuracy: 0.0001)
+    }
+
+    func testManagedVideoStoreRejectsUnsupportedFileType() {
+        let input = URL(fileURLWithPath: "/tmp/test-audio-only.txt")
+        XCTAssertThrowsError(try ManagedVideoFileStore.copy(from: input))
+    }
+
     func testLaunchStatusMessage() {
         XCTAssertEqual(LaunchStatus.message, "Launch successful")
     }

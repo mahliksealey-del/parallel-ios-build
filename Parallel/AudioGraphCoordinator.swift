@@ -23,6 +23,7 @@ final class AudioGraphCoordinator: AudioGraphControlling {
     private let metronome: MetronomeEngineProtocol
     private var audioEngine: AVAudioEngine?
     private var configurationObserver: NSObjectProtocol?
+    private var graphToken: UUID?
     var onConfigurationChange: (() -> Void)?
 
     init(metronome: MetronomeEngineProtocol) {
@@ -53,11 +54,13 @@ final class AudioGraphCoordinator: AudioGraphControlling {
 
         audioEngine = graph
         metronome.markPlaying()
+        let token = UUID()
+        graphToken = token
         configurationObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: graph, queue: .main
-        ) { [weak self, weak graph] _ in
-            Task { @MainActor [weak self, weak graph] in
-                guard let self, let graph, self.audioEngine === graph else { return }
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.graphToken == token else { return }
                 self.tearDownGraph()
                 self.metronome.markRecovering()
                 self.onConfigurationChange?()
@@ -85,6 +88,7 @@ final class AudioGraphCoordinator: AudioGraphControlling {
             NotificationCenter.default.removeObserver(configurationObserver)
         }
         configurationObserver = nil
+        graphToken = nil
         audioEngine?.stop()
         audioEngine = nil
     }
