@@ -11,15 +11,17 @@ final class MetronomeViewModel: ObservableObject {
     @Published var gain = 0.65
 
     private let engine: MetronomeEngineProtocol
-    private let coordinator: AudioSessionCoordinator
+    let coordinator: AudioSessionCoordinator
 
     convenience init() {
-        self.init(engine: MetronomeEngine())
+        let engine = MetronomeEngine()
+        let coordinator = AudioSessionCoordinator(graph: AudioGraphCoordinator(metronome: engine))
+        self.init(engine: engine, coordinator: coordinator)
     }
 
-    init(engine: MetronomeEngineProtocol) {
+    init(engine: MetronomeEngineProtocol, coordinator: AudioSessionCoordinator) {
         self.engine = engine
-        self.coordinator = AudioSessionCoordinator(engine: engine)
+        self.coordinator = coordinator
         coordinator.onStateChange = { [weak self] state in
             self?.state = state
             if case .failed(let message) = state { self?.errorMessage = message }
@@ -31,8 +33,8 @@ final class MetronomeViewModel: ObservableObject {
         }
     }
 
-    var isPlaying: Bool { state == .active }
-    var canEditTempo: Bool { state == .inactive || isFailed }
+    var isPlaying: Bool { coordinator.userRequestedPlayback && state == .active }
+    var canEditTempo: Bool { !coordinator.userRequestedPlayback || isFailed }
 
     func togglePlayback() {
         if coordinator.userRequestedPlayback { coordinator.stop() }

@@ -1,9 +1,13 @@
 import XCTest
-import MetronomeEngine
 @testable import Parallel
 
 @MainActor
 final class ParallelTests: XCTestCase {
+    func testAppRootInjectsOneSharedSession() {
+        let container = ParallelAudioContainer()
+        XCTAssertTrue(container.metronome.coordinator === container.session)
+    }
+
     func testLaunchStatusMessage() {
         XCTAssertEqual(LaunchStatus.message, "Launch successful")
     }
@@ -14,7 +18,7 @@ final class ParallelTests: XCTestCase {
         fixture.coordinator.start()
         XCTAssertEqual(fixture.session.configureCount, 1)
         XCTAssertEqual(fixture.session.activateCount, 1)
-        XCTAssertEqual(fixture.engine.startCount, 1)
+        XCTAssertEqual(fixture.graph.startCount, 1)
         XCTAssertEqual(fixture.coordinator.state, .active)
     }
 
@@ -24,16 +28,16 @@ final class ParallelTests: XCTestCase {
         fixture.coordinator.start()
         guard case .failed = fixture.coordinator.state else { return XCTFail("Expected a visible failure") }
         XCTAssertFalse(fixture.coordinator.userRequestedPlayback)
-        XCTAssertEqual(fixture.engine.stopCount, 1)
+        XCTAssertEqual(fixture.graph.stopCount, 1)
     }
 
     func testEngineStartFailureIsVisibleAndRetryable() {
         let fixture = makeFixture()
-        fixture.engine.startError = TestError.expected
+        fixture.graph.startError = TestError.expected
         fixture.coordinator.start()
         guard case .failed = fixture.coordinator.state else { return XCTFail("Expected a visible failure") }
         XCTAssertFalse(fixture.coordinator.userRequestedPlayback)
-        XCTAssertGreaterThanOrEqual(fixture.engine.stopCount, 1)
+        XCTAssertGreaterThanOrEqual(fixture.graph.stopCount, 1)
     }
 
     func testInterruptionResumesOnlyWithSystemPermission() {
@@ -42,7 +46,7 @@ final class ParallelTests: XCTestCase {
         fixture.coordinator.interruptionBegan()
         XCTAssertEqual(fixture.coordinator.state, .interrupted)
         fixture.coordinator.interruptionEnded(shouldResume: true)
-        XCTAssertEqual(fixture.engine.startCount, 2)
+        XCTAssertEqual(fixture.graph.startCount, 2)
         XCTAssertEqual(fixture.coordinator.state, .active)
     }
 
@@ -51,7 +55,7 @@ final class ParallelTests: XCTestCase {
         fixture.coordinator.start()
         fixture.coordinator.interruptionBegan()
         fixture.coordinator.interruptionEnded(shouldResume: false)
-        XCTAssertEqual(fixture.engine.startCount, 1)
+        XCTAssertEqual(fixture.graph.startCount, 1)
         XCTAssertFalse(fixture.coordinator.userRequestedPlayback)
         XCTAssertEqual(fixture.coordinator.state, .inactive)
     }
@@ -62,7 +66,7 @@ final class ParallelTests: XCTestCase {
         fixture.coordinator.interruptionBegan()
         fixture.coordinator.stop()
         fixture.coordinator.interruptionEnded(shouldResume: true)
-        XCTAssertEqual(fixture.engine.startCount, 1)
+        XCTAssertEqual(fixture.graph.startCount, 1)
         XCTAssertEqual(fixture.coordinator.state, .inactive)
     }
 
@@ -90,15 +94,174 @@ final class ParallelTests: XCTestCase {
         fixture.coordinator.mediaServicesWereLost()
         fixture.coordinator.mediaServicesWereReset()
         XCTAssertEqual(fixture.session.configureCount, 2)
-        XCTAssertEqual(fixture.engine.startCount, 2)
+        XCTAssertEqual(fixture.graph.startCount, 2)
         XCTAssertEqual(fixture.coordinator.state, .active)
     }
 
-    private func makeFixture() -> (coordinator: AudioSessionCoordinator, session: FakeSession, engine: FakeEngine) {
+
+    func testSecondSourceDoesNotReactivateSession() {
+        let f = makeFixture()
+        let media = FakeSource()
+        XCTAssertTrue(f.coordinator.register(media, for: .media(0)))
+        f.coordinator.start()
+        f.coordinator.requestPlayback(for: .media(0))
+        XCTAssertEqual(f.session.configureCount, 1)
+        XCTAssertEqual(f.session.activateCount, 1)
+        XCTAssertEqual(f.graph.startCount, 1)
+        XCTAssertEqual(media.startCount, 1)
+        XCTAssertEqual(f.coordinator.requestedSources.count, 2)
+    }
+
+    func testStoppingMetronomeKeepsMediaAndSessionAlive() {
+        let f = makeFixture()
+        let media = FakeSource()
+        XCTAssertTrue(f.coordinator.register(media, for: .media(0)))
+        f.coordinator.start()
+        f.coordinator.requestPlayback(for: .media(0))
+        f.coordinator.stop()
+        XCTAssertFalse(f.coordinator.userRequestedPlayback)
+        XCTAssertEqual(f.graph.stopCount, 1)
+        XCTAssertEqual(media.stopCount, 0)
+        XCTAssertEqual(f.session.deactivateCount, 0)
+        XCTAssertEqual(f.coordinator.state, .active)
+        f.coordinator.stopPlayback(for: .media(0))
+        XCTAssertEqual(f.session.deactivateCount, 1)
+        XCTAssertEqual(f.coordinator.state, .inactive)
+    }
+
+    func testMediaFirstThenMetronomeUsesOneSession() {
+        let f = makeFixture()
+        let media = FakeSource()
+        XCTAssertTrue(f.coordinator.register(media, for: .media(1)))
+        f.coordinator.requestPlayback(for: .media(1))
+        f.coordinator.start()
+        XCTAssertEqual(f.session.activateCount, 1)
+        XCTAssertEqual(media.startCount, 1)
+        XCTAssertEqual(f.graph.startCount, 1)
+        f.coordinator.stopPlayback(for: .media(1))
+        XCTAssertEqual(f.session.deactivateCount, 0)
+        f.coordinator.stop()
+        XCTAssertEqual(f.session.deactivateCount, 1)
+    }
+
+    func testMediaOnlyPlaybackAndRepeatedStopAreIdempotent() {
+        let f = makeFixture()
+        let media = FakeSource()
+        XCTAssertTrue(f.coordinator.register(media, for: .media(2)))
+        f.coordinator.requestPlayback(for: .media(2))
+        f.coordinator.requestPlayback(for: .media(2))
+        XCTAssertEqual(media.startCount, 1)
+        XCTAssertEqual(f.graph.startCount, 0)
+        f.coordinator.stopPlayback(for: .media(2))
+        f.coordinator.stopPlayback(for: .media(2))
+        XCTAssertEqual(media.stopCount, 1)
+        XCTAssertEqual(f.session.deactivateCount, 1)
+    }
+
+    func testFailureOfSecondSourcePreservesCurrentPlayback() {
+        let f = makeFixture()
+        let media = FakeSource()
+        media.startError = TestError.expected
+        XCTAssertTrue(f.coordinator.register(media, for: .media(0)))
+        f.coordinator.start()
+        var error: String?
+        f.coordinator.onSourceError = { _, message in error = message }
+        f.coordinator.requestPlayback(for: .media(0))
+        XCTAssertNotNil(error)
+        XCTAssertEqual(f.coordinator.state, .active)
+        XCTAssertEqual(f.coordinator.requestedSources, Set([AudioSourceID.metronome]))
+        XCTAssertEqual(f.session.deactivateCount, 0)
+        XCTAssertEqual(f.graph.stopCount, 0)
+    }
+
+    func testBothSourcesRecoverFromPermittedInterruption() {
+        let f = makeFixture()
+        let media = FakeSource()
+        XCTAssertTrue(f.coordinator.register(media, for: .media(0)))
+        f.coordinator.start()
+        f.coordinator.requestPlayback(for: .media(0))
+        f.coordinator.interruptionBegan()
+        XCTAssertEqual(media.interruptCount, 1)
+        XCTAssertEqual(f.graph.interruptCount, 1)
+        f.coordinator.interruptionEnded(shouldResume: true)
+        XCTAssertEqual(media.startCount, 2)
+        XCTAssertEqual(f.graph.startCount, 2)
+        XCTAssertEqual(f.session.activateCount, 2)
+    }
+
+    func testOutputRemovalStopsEveryRegisteredActiveSource() {
+        let f = makeFixture()
+        let media = FakeSource()
+        XCTAssertTrue(f.coordinator.register(media, for: .media(0)))
+        f.coordinator.start()
+        f.coordinator.requestPlayback(for: .media(0))
+        f.coordinator.outputDeviceWasRemoved()
+        XCTAssertEqual(media.stopCount, 1)
+        XCTAssertEqual(f.graph.stopCount, 1)
+        XCTAssertTrue(f.coordinator.requestedSources.isEmpty)
+        XCTAssertEqual(f.session.deactivateCount, 1)
+    }
+
+    func testUnregisterReleasesActiveMediaAndRetainsMetronome() {
+        let f = makeFixture()
+        let media = FakeSource()
+        XCTAssertTrue(f.coordinator.register(media, for: .media(0)))
+        f.coordinator.start()
+        f.coordinator.requestPlayback(for: .media(0))
+        f.coordinator.unregister(.media(0))
+        XCTAssertEqual(media.stopCount, 1)
+        XCTAssertEqual(f.session.deactivateCount, 0)
+        f.coordinator.stop()
+        XCTAssertEqual(f.session.deactivateCount, 1)
+    }
+
+    func testRegistrationRejectsDuplicateAndMetronomeReplacement() {
+        let f = makeFixture()
+        let media = FakeSource()
+        XCTAssertFalse(f.coordinator.register(media, for: .metronome))
+        XCTAssertTrue(f.coordinator.register(media, for: .media(0)))
+        XCTAssertFalse(f.coordinator.register(FakeSource(), for: .media(0)))
+    }
+
+    func testGraphReconfigurationPreservesMediaSource() {
+        let f = makeFixture()
+        let media = FakeSource()
+        XCTAssertTrue(f.coordinator.register(media, for: .media(0)))
+        f.coordinator.start()
+        f.coordinator.requestPlayback(for: .media(0))
+        f.graph.onConfigurationChange?()
+        XCTAssertEqual(f.graph.startCount, 2)
+        XCTAssertEqual(media.startCount, 1)
+        XCTAssertEqual(media.stopCount, 0)
+        XCTAssertEqual(f.session.deactivateCount, 0)
+        XCTAssertEqual(f.coordinator.state, .active)
+    }
+
+    func testMediaServicesResetRestoresAllRequestedSources() {
+        let f = makeFixture()
+        let media = FakeSource()
+        XCTAssertTrue(f.coordinator.register(media, for: .media(0)))
+        f.coordinator.start()
+        f.coordinator.requestPlayback(for: .media(0))
+        f.coordinator.mediaServicesWereLost()
+        f.coordinator.mediaServicesWereReset()
+        XCTAssertEqual(media.startCount, 2)
+        XCTAssertEqual(f.graph.startCount, 2)
+        XCTAssertEqual(f.session.activateCount, 2)
+    }
+
+    func testUnregisteredMediaCannotActivateSession() {
+        let f = makeFixture()
+        f.coordinator.requestPlayback(for: .media(99))
+        XCTAssertEqual(f.session.activateCount, 0)
+        XCTAssertTrue(f.coordinator.requestedSources.isEmpty)
+    }
+
+    private func makeFixture() -> (coordinator: AudioSessionCoordinator, session: FakeSession, graph: FakeGraph) {
         let session = FakeSession()
-        let engine = FakeEngine()
-        let coordinator = AudioSessionCoordinator(session: session, engine: engine, observeSystemNotifications: false)
-        return (coordinator, session, engine)
+        let graph = FakeGraph()
+        let coordinator = AudioSessionCoordinator(session: session, graph: graph, observeSystemNotifications: false)
+        return (coordinator, session, graph)
     }
 }
 
@@ -119,23 +282,22 @@ private final class FakeSession: AudioSessionControlling {
 }
 
 @MainActor
-private final class FakeEngine: MetronomeEngineProtocol {
-    var state: MetronomeEngineState = .stopped
-    var bpm = 120.0
-    var gain: Float = 0.65
-    var onStateChange: ((MetronomeEngineState) -> Void)?
-    var onConfigurationChange: (() -> Void)?
+private class FakeSource: AudioPlaybackSource {
     var startCount = 0
     var stopCount = 0
+    var interruptCount = 0
+    var recoveryCount = 0
     var startError: Error?
-    func setBPM(_ bpm: Double) throws { self.bpm = bpm }
-    func setGain(_ gain: Float) throws { self.gain = gain }
     func start(sampleRate: Double) throws {
         startCount += 1
         if let startError { throw startError }
-        state = .playing
     }
-    func stop() { stopCount += 1; state = .stopped }
-    func markInterrupted() { state = .interrupted }
-    func markRecovering() { state = .recovering }
+    func stop() { stopCount += 1 }
+    func markInterrupted() { interruptCount += 1 }
+    func markRecovering() { recoveryCount += 1 }
+}
+
+@MainActor
+private final class FakeGraph: FakeSource, AudioGraphControlling {
+    var onConfigurationChange: (() -> Void)?
 }

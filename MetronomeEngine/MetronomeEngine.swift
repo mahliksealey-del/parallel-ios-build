@@ -28,16 +28,24 @@ public enum MetronomeEngineError: LocalizedError, Equatable {
     }
 }
 
+// The app-level graph owns AVAudioEngine. The metronome only supplies nodes.
+public struct MetronomeAudioNodes {
+    public let source: AVAudioSourceNode
+    public let gainMixer: AVAudioMixerNode
+    public let format: AVAudioFormat
+}
+
 @MainActor
 public protocol MetronomeEngineProtocol: AnyObject {
     var state: MetronomeEngineState { get }
     var bpm: Double { get }
     var gain: Float { get }
     var onStateChange: ((MetronomeEngineState) -> Void)? { get set }
-    var onConfigurationChange: (() -> Void)? { get set }
     func setBPM(_ bpm: Double) throws
     func setGain(_ gain: Float) throws
-    func start(sampleRate: Double) throws
+    func makeNodes(sampleRate: Double) throws -> MetronomeAudioNodes
+    func markPlaying()
+    func markFailed(_ message: String)
     func stop()
     func markInterrupted()
     func markRecovering()
@@ -51,12 +59,7 @@ public final class MetronomeEngine: MetronomeEngineProtocol {
     public private(set) var bpm = 120.0
     public private(set) var gain: Float = 0.65
     public var onStateChange: ((MetronomeEngineState) -> Void)?
-    public var onConfigurationChange: (() -> Void)?
-
-    private var audioEngine: AVAudioEngine?
-    private var sourceNode: AVAudioSourceNode?
     private var gainMixer: AVAudioMixerNode?
-    private var configurationObserver: NSObjectProtocol?
 
     public init() {}
 
@@ -72,77 +75,36 @@ public final class MetronomeEngine: MetronomeEngineProtocol {
         gainMixer?.outputVolume = gain
     }
 
-    public func start(sampleRate: Double) throws {
-        if state == .playing || state == .starting { return }
+    public func makeNodes(sampleRate: Double) throws -> MetronomeAudioNodes {
+        guard state != .playing && state != .starting else { throw MetronomeEngineError.alreadyRunning }
         guard sampleRate.isFinite, sampleRate > 0 else { throw MetronomeEngineError.invalidSampleRate }
-        state = .starting
-        tearDownGraph()
-
-        let engine = AVAudioEngine()
-        let mixer = AVAudioMixerNode()
-        mixer.outputVolume = gain
-        engine.attach(mixer)
         guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2) else {
-            state = .failed(MetronomeEngineError.invalidSampleRate.localizedDescription)
             throw MetronomeEngineError.invalidSampleRate
         }
-
+        state = .starting
+        let mixer = AVAudioMixerNode()
+        mixer.outputVolume = gain
         let renderState = RenderState(bpm: bpm, sampleRate: sampleRate)
         let source = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
             renderState.render(frameCount: frameCount, audioBufferList: audioBufferList)
             return noErr
         }
-        engine.attach(source)
-        engine.connect(source, to: mixer, format: format)
-        engine.connect(mixer, to: engine.mainMixerNode, format: format)
-        engine.prepare()
-
-        do {
-            try engine.start()
-            audioEngine = engine
-            sourceNode = source
-            gainMixer = mixer
-            state = .playing
-            configurationObserver = NotificationCenter.default.addObserver(
-                forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
-            ) { [weak self] _ in
-                Task { @MainActor in self?.onConfigurationChange?() }
-            }
-        } catch {
-            tearDownGraph()
-            let wrapped = MetronomeEngineError.graphStartFailed(error.localizedDescription)
-            state = .failed(wrapped.localizedDescription)
-            throw wrapped
-        }
+        gainMixer = mixer
+        return MetronomeAudioNodes(source: source, gainMixer: mixer, format: format)
     }
 
-    public func stop() {
-        tearDownGraph()
-        state = .stopped
-    }
-
-    public func markInterrupted() {
-        tearDownGraph()
-        state = .interrupted
-    }
-
-    public func markRecovering() { state = .recovering }
+    public func markPlaying() { state = .playing }
+    public func markFailed(_ message: String) { gainMixer = nil; state = .failed(message) }
+    public func stop() { gainMixer = nil; state = .stopped }
+    public func markInterrupted() { gainMixer = nil; state = .interrupted }
+    public func markRecovering() { gainMixer = nil; state = .recovering }
 
     private var isFailure: Bool {
         if case .failed = state { return true }
         return false
     }
 
-    private func tearDownGraph() {
-        if let configurationObserver { NotificationCenter.default.removeObserver(configurationObserver) }
-        configurationObserver = nil
-        audioEngine?.stop()
-        if let sourceNode { audioEngine?.detach(sourceNode) }
-        if let gainMixer { audioEngine?.detach(gainMixer) }
-        sourceNode = nil
-        gainMixer = nil
-        audioEngine = nil
-    }
+
 }
 
 private final class RenderState: @unchecked Sendable {

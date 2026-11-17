@@ -21,6 +21,7 @@
 		100000000000000000000013 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000000000000000000005 /* XCTest.framework */; };
 		100000000000000000000014 /* MetronomeEngine.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000000000000000000012 /* MetronomeEngine.framework */; };
 		100000000000000000000015 /* MetronomeEngine.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000000000000000000012 /* MetronomeEngine.framework */; };
+		100000000000000000000016 /* AudioGraphCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000016 /* AudioGraphCoordinator.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -52,6 +53,7 @@
 		200000000000000000000013 /* MetronomeTimingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetronomeTimingTests.swift; sourceTree = "<group>"; };
 		200000000000000000000014 /* MetronomeEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetronomeEngineTests.swift; sourceTree = "<group>"; };
 		200000000000000000000015 /* MetronomeEngineTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MetronomeEngineTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		200000000000000000000016 /* AudioGraphCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioGraphCoordinator.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -67,7 +69,7 @@
 			children = (700000000000000000000002 /* Parallel */, 700000000000000000000003 /* ParallelTests */, 700000000000000000000006 /* MetronomeEngine */, 700000000000000000000007 /* MetronomeEngineTests */, 700000000000000000000004 /* Frameworks */, 700000000000000000000005 /* Products */);
 			sourceTree = "<group>";
 		};
-		700000000000000000000002 /* Parallel */ = {isa = PBXGroup; path = Parallel; sourceTree = "<group>"; children = (200000000000000000000001, 200000000000000000000002, 200000000000000000000003, 200000000000000000000008, 200000000000000000000009); };
+		700000000000000000000002 /* Parallel */ = {isa = PBXGroup; path = Parallel; sourceTree = "<group>"; children = (200000000000000000000001, 200000000000000000000002, 200000000000000000000003, 200000000000000000000008, 200000000000000000000009, 200000000000000000000016); };
 		700000000000000000000003 /* ParallelTests */ = {isa = PBXGroup; path = ParallelTests; sourceTree = "<group>"; children = (200000000000000000000004); };
 		700000000000000000000004 /* Frameworks */ = {isa = PBXGroup; children = (200000000000000000000005); name = Frameworks; sourceTree = "<group>"; };
 		700000000000000000000005 /* Products */ = {isa = PBXGroup; children = (200000000000000000000006, 200000000000000000000007, 200000000000000000000012, 200000000000000000000015); name = Products; sourceTree = "<group>"; };
@@ -145,7 +147,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		900000000000000000000001 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000001, 100000000000000000000002, 100000000000000000000003, 100000000000000000000006, 100000000000000000000007); runOnlyForDeploymentPostprocessing = 0; };
+		900000000000000000000001 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000001, 100000000000000000000002, 100000000000000000000003, 100000000000000000000006, 100000000000000000000007, 100000000000000000000016); runOnlyForDeploymentPostprocessing = 0; };
 		900000000000000000000002 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000004); runOnlyForDeploymentPostprocessing = 0; };
 		900000000000000000000003 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000008, 100000000000000000000009); runOnlyForDeploymentPostprocessing = 0; };
 		900000000000000000000004 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (100000000000000000000011, 100000000000000000000012); runOnlyForDeploymentPostprocessing = 0; };
