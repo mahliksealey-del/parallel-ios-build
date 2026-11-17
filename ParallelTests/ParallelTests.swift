@@ -18,6 +18,120 @@ final class ParallelTests: XCTestCase {
         XCTAssertFalse(container.session.register(FakeSource(), for: .media(0)))
     }
 
+    func testContainerOwnsExactlyThreeRegisteredSlots() {
+        let container = ParallelAudioContainer()
+        XCTAssertEqual(container.videos.count, 3)
+        XCTAssertEqual(container.videos.map(\.slot), [0, 1, 2])
+        XCTAssertTrue(container.media === container.videos[0])
+        XCTAssertEqual(Set(container.videos.map(\.slot)).count, 3)
+        for index in 0..<3 {
+            XCTAssertFalse(container.session.register(FakeSource(), for: .media(index)))
+        }
+        XCTAssertTrue(container.session.requestedSources.isEmpty)
+    }
+
+    func testMediaSlotIdentityAndIndependentLevels() {
+        let f = makeFixture()
+        let slots = (0..<3).map { MediaMixerViewModel(coordinator: f.coordinator, slot: $0) }
+        XCTAssertEqual(slots.map(\.slot), [0, 1, 2])
+        slots[0].volume = 0.2
+        slots[1].volume = 0.4
+        slots[2].volume = 0.8
+        slots.forEach { $0.applyVolume() }
+        XCTAssertEqual(slots.map(\.volume), [0.2, 0.4, 0.8])
+        XCTAssertTrue(slots.allSatisfy { !$0.hasVideo && !$0.isPlaying })
+        XCTAssertEqual(f.session.activateCount, 0)
+    }
+
+    func testThreeIndependentMediaSlotsRefusePlaybackBeforeImport() {
+        let f = makeFixture()
+        let slots = (0..<3).map { MediaMixerViewModel(coordinator: f.coordinator, slot: $0) }
+        slots.forEach { $0.togglePlayback() }
+        XCTAssertTrue(slots.allSatisfy { $0.errorMessage != nil && !$0.isPlaying })
+        XCTAssertTrue(f.coordinator.requestedSources.isEmpty)
+        XCTAssertEqual(f.session.activateCount, 0)
+    }
+
+    func testThreeVideoSourcesAndMetronomeShareOneActivation() {
+        let f = makeFixture()
+        let players = (0..<3).map { _ in FakeSource() }
+        for index in 0..<3 {
+            XCTAssertTrue(f.coordinator.register(players[index], for: .media(index)))
+        }
+        f.coordinator.start()
+        for index in 0..<3 { f.coordinator.requestPlayback(for: .media(index)) }
+        XCTAssertEqual(f.session.configureCount, 1)
+        XCTAssertEqual(f.session.activateCount, 1)
+        XCTAssertEqual(f.graph.startCount, 1)
+        XCTAssertEqual(players.map(\.startCount), [1, 1, 1])
+        XCTAssertEqual(f.coordinator.requestedSources.count, 4)
+    }
+
+    func testPausingMiddleVideoPreservesBothOthersAndMetronome() {
+        let f = makeFixture()
+        let players = (0..<3).map { _ in FakeSource() }
+        for index in 0..<3 {
+            XCTAssertTrue(f.coordinator.register(players[index], for: .media(index)))
+            f.coordinator.requestPlayback(for: .media(index))
+        }
+        f.coordinator.start()
+        f.coordinator.stopPlayback(for: .media(1))
+        XCTAssertEqual(players.map(\.stopCount), [0, 1, 0])
+        XCTAssertEqual(f.coordinator.requestedSources,
+                       Set([.media(0), .media(2), .metronome]))
+        XCTAssertEqual(f.session.deactivateCount, 0)
+        XCTAssertEqual(f.graph.stopCount, 0)
+    }
+
+    func testThreeMediaOnlyPlayersReleaseSessionOnlyAfterLastStop() {
+        let f = makeFixture()
+        let players = (0..<3).map { _ in FakeSource() }
+        for index in 0..<3 {
+            XCTAssertTrue(f.coordinator.register(players[index], for: .media(index)))
+            f.coordinator.requestPlayback(for: .media(index))
+        }
+        XCTAssertEqual(f.session.activateCount, 1)
+        XCTAssertEqual(f.graph.startCount, 0)
+        f.coordinator.stopPlayback(for: .media(0))
+        f.coordinator.stopPlayback(for: .media(1))
+        XCTAssertEqual(f.session.deactivateCount, 0)
+        XCTAssertEqual(f.coordinator.requestedSources, Set([.media(2)]))
+        f.coordinator.stopPlayback(for: .media(2))
+        XCTAssertEqual(f.session.deactivateCount, 1)
+        XCTAssertTrue(f.coordinator.requestedSources.isEmpty)
+    }
+
+    func testSourceErrorsAreRoutedToCorrectVideoSlot() {
+        let container = ParallelAudioContainer()
+        container.session.onSourceError?(.media(1), "Video 2 failure")
+        XCTAssertNil(container.videos[0].errorMessage)
+        XCTAssertEqual(container.videos[1].errorMessage, "Video 2 failure")
+        XCTAssertNil(container.videos[2].errorMessage)
+        container.session.onSourceError?(.media(2), "Video 3 failure")
+        XCTAssertNil(container.videos[0].errorMessage)
+        XCTAssertEqual(container.videos[1].errorMessage, "Video 2 failure")
+        XCTAssertEqual(container.videos[2].errorMessage, "Video 3 failure")
+    }
+
+    func testAllThreeVideoSurfacesDetachIndependentlyInBackground() {
+        let canvases = (0..<3).map { _ in PlayerCanvas(frame: .zero) }
+        let players = (0..<3).map { _ in AVPlayer() }
+        for index in 0..<3 {
+            MediaMixerViewModel.configureForBackgroundPlayback(players[index])
+            XCTAssertEqual(players[index].audiovisualBackgroundPlaybackPolicy, .continuesIfPossible)
+            canvases[index].updatePresentation(player: players[index], isForeground: true)
+            XCTAssertTrue(canvases[index].playerLayer.player === players[index])
+        }
+        for index in 0..<3 {
+            canvases[index].updatePresentation(player: players[index], isForeground: false)
+            XCTAssertNil(canvases[index].playerLayer.player)
+        }
+        for index in 0..<3 {
+            canvases[index].updatePresentation(player: players[index], isForeground: true)
+            XCTAssertTrue(canvases[index].playerLayer.player === players[index])
+        }
+    }
+
     func testMediaMixerRequiresImportedFileBeforePlayback() {
         let f = makeFixture()
         let media = MediaMixerViewModel(coordinator: f.coordinator)

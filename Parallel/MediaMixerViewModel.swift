@@ -77,13 +77,17 @@ final class MediaMixerViewModel: ObservableObject, AudioPlaybackSource {
     @Published var volume = 0.65
 
     private weak var coordinator: AudioSessionCoordinator?
-    private let sourceID = AudioSourceID.media(0)
+    let slot: Int
+    private let sourceID: AudioSourceID
     private var managedFile: URL?
     private var endObserver: NSObjectProtocol?
     private var failedObserver: NSObjectProtocol?
     private var itemToken = UUID()
 
-    init(coordinator: AudioSessionCoordinator) {
+    init(coordinator: AudioSessionCoordinator, slot: Int = 0) {
+        precondition((0..<3).contains(slot), "MediaMixer supports only slots 0, 1, and 2.")
+        self.slot = slot
+        self.sourceID = .media(slot)
         self.coordinator = coordinator
         precondition(coordinator.register(self, for: sourceID), "Video slot already registered.")
     }

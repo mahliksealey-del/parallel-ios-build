@@ -5,57 +5,26 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @ObservedObject var model: MetronomeViewModel
-    @ObservedObject var media: MediaMixerViewModel
-    @State private var showingFileImporter = false
+    let videos: [MediaMixerViewModel]
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Video 1 · MediaMixer") {
-                    VideoSurface(player: media.player, isForeground: scenePhase == .active)
-                        .frame(height: 210)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .accessibilityIdentifier("media-preview-1")
-
-                    Button {
-                        showingFileImporter = true
-                    } label: {
-                        Label(media.hasVideo ? "Replace video" : "Import video from Files",
-                              systemImage: "folder.badge.plus")
+                Section("Video wall · MediaMixer") {
+                    VStack(spacing: 12) {
+                        // Always show all three live displays together when
+                        // Parallel is active. Video 1 is reserved for future PiP.
+                        MediaSlotCard(media: videos[0], foreground: scenePhase == .active,
+                                      compact: false)
+                        HStack(alignment: .top, spacing: 10) {
+                            MediaSlotCard(media: videos[1], foreground: scenePhase == .active,
+                                          compact: true)
+                            MediaSlotCard(media: videos[2], foreground: scenePhase == .active,
+                                          compact: true)
+                        }
                     }
-                    .disabled(media.isImporting)
-                    .accessibilityIdentifier("media-import-1")
-
-                    Text(media.fileName)
-                        .lineLimit(2)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-
-                    if media.isImporting {
-                        ProgressView("Importing and checking video...")
-                    }
-
-                    Button(media.isPlaying ? "Pause Video" : "Play Video") {
-                        media.togglePlayback()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!media.hasVideo || media.isImporting)
-                    .accessibilityIdentifier("media-transport-1")
-
-                    Slider(value: $media.volume, in: 0...1)
-                        .onChange(of: media.volume) { _ in media.applyVolume() }
-                        .accessibilityLabel("Video 1 volume")
-                    Text("Video level: \(Int(media.volume * 100))%")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    LabeledContent("Video status", value: media.status)
-                }
-
-                if let error = media.errorMessage {
-                    Section("Video problem") {
-                        Text(error).foregroundStyle(.red)
-                    }
+                    .frame(maxWidth: .infinity)
                 }
 
                 Section("Tempo") {
@@ -100,16 +69,93 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("Parallel")
-            .fileImporter(
-                isPresented: $showingFileImporter,
-                allowedContentTypes: [.movie]
-            ) { result in
-                switch result {
-                case .success(let url):
-                    Task { @MainActor in await media.importVideo(from: url) }
-                case .failure(let error):
-                    Task { @MainActor in media.reportError(error.localizedDescription) }
+        }
+    }
+}
+
+// Separate @State for every Files picker, and separate @ObservedObject for
+// every AVPlayer. Neither file replacement nor transport in one tile changes
+// the player, intent, or slider values of its siblings.
+private struct MediaSlotCard: View {
+    @ObservedObject var media: MediaMixerViewModel
+    let foreground: Bool
+    let compact: Bool
+    @State private var showingFileImporter = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: compact ? 6 : 8) {
+            HStack(spacing: 5) {
+                Text("Video \(media.slot + 1)").font(compact ? .subheadline.bold() : .headline)
+                Spacer(minLength: 2)
+                Text(media.isPlaying ? "Playing" : (media.hasVideo ? "Paused" : "Empty"))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            VideoSurface(player: media.player, isForeground: foreground)
+                .frame(height: compact ? 88 : 168)
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+                .accessibilityIdentifier("media-preview-\(media.slot + 1)")
+
+            HStack(spacing: 6) {
+                Button {
+                    showingFileImporter = true
+                } label: {
+                    Image(systemName: "folder.badge.plus")
+                        .frame(maxWidth: .infinity, minHeight: 36)
                 }
+                .buttonStyle(.bordered)
+                .disabled(media.isImporting)
+                .accessibilityLabel("Import or replace Video \(media.slot + 1)")
+                .accessibilityIdentifier("media-import-\(media.slot + 1)")
+
+                Button {
+                    media.togglePlayback()
+                } label: {
+                    Image(systemName: media.isPlaying ? "pause.fill" : "play.fill")
+                        .frame(maxWidth: .infinity, minHeight: 36)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!media.hasVideo || media.isImporting)
+                .accessibilityLabel("\(media.isPlaying ? "Pause" : "Play") Video \(media.slot + 1)")
+                .accessibilityIdentifier("media-transport-\(media.slot + 1)")
+            }
+
+            HStack(spacing: 4) {
+                Image(systemName: "speaker.wave.2")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Slider(value: $media.volume, in: 0...1)
+                    .onChange(of: media.volume) { _ in media.applyVolume() }
+                    .accessibilityLabel("Video \(media.slot + 1) volume")
+                    .accessibilityIdentifier("media-volume-\(media.slot + 1)")
+            }
+            Text(media.fileName)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            if media.isImporting {
+                ProgressView("Importing...")
+                    .font(.caption2)
+            }
+            if let error = media.errorMessage {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(compact ? 6 : 10)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(Color(.secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 10))
+        .fileImporter(isPresented: $showingFileImporter, allowedContentTypes: [.movie]) { result in
+            switch result {
+            case .success(let url):
+                Task { @MainActor in await media.importVideo(from: url) }
+            case .failure(let error):
+                Task { @MainActor in media.reportError(error.localizedDescription) }
             }
         }
     }
@@ -158,5 +204,5 @@ final class PlayerCanvas: UIView {
 
 #Preview {
     let audio = ParallelAudioContainer()
-    ContentView(model: audio.metronome, media: audio.media)
+    ContentView(model: audio.metronome, videos: audio.videos)
 }
