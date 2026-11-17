@@ -147,6 +147,32 @@ final class AudioSessionCoordinator {
         }
     }
 
+    // Rebuild only the metronome audio graph for live tempo edits. Every
+    // media AVPlayer and the shared audio-session activation remain untouched.
+    func reconfigureMetronome(_ updateEngine: () throws -> Void) throws {
+        guard requestedSources.contains(.metronome), sessionActivated else {
+            try updateEngine()
+            return
+        }
+        graph.stop()
+        do {
+            try updateEngine()
+            try graph.start(sampleRate: session.sampleRate)
+            state = .active
+        } catch {
+            graph.stop()
+            requestedSources.remove(.metronome)
+            onSourceError?(.metronome, error.localizedDescription)
+            if requestedSources.isEmpty {
+                try? deactivateSessionIfNeeded()
+                state = .failed(error.localizedDescription)
+            } else {
+                state = .active
+            }
+            throw error
+        }
+    }
+
     func interruptionBegan() {
         guard !requestedSources.isEmpty else { return }
         for id in requestedSources { sources[id]?.markInterrupted() }

@@ -1,4 +1,6 @@
 import AVFoundation
+import AVKit
+import Combine
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
@@ -6,7 +8,9 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @ObservedObject var model: MetronomeViewModel
     let videos: [MediaMixerViewModel]
+    @ObservedObject var pip: VideoPiPCoordinator
     @Environment(\.scenePhase) private var scenePhase
+    @State private var isDraggingTempo = false
 
     var body: some View {
         NavigationStack {
@@ -15,12 +19,12 @@ struct ContentView: View {
                     VStack(spacing: 12) {
                         // Always show all three live displays together when
                         // Parallel is active. Video 1 is reserved for future PiP.
-                        MediaSlotCard(media: videos[0], foreground: scenePhase == .active,
+                        MediaSlotCard(media: videos[0], pip: pip, foreground: scenePhase == .active,
                                       compact: false)
                         HStack(alignment: .top, spacing: 10) {
-                            MediaSlotCard(media: videos[1], foreground: scenePhase == .active,
+                            MediaSlotCard(media: videos[1], pip: pip, foreground: scenePhase == .active,
                                           compact: true)
-                            MediaSlotCard(media: videos[2], foreground: scenePhase == .active,
+                            MediaSlotCard(media: videos[2], pip: pip, foreground: scenePhase == .active,
                                           compact: true)
                         }
                     }
@@ -35,12 +39,20 @@ struct ContentView: View {
                             .labelsHidden()
                             .disabled(!model.canEditTempo)
                     }
-                    Slider(value: $model.bpm, in: 30...300, step: 1)
+                    Slider(
+                        value: $model.bpm, in: 30...300, step: 1,
+                        onEditingChanged: { editing in
+                            isDraggingTempo = editing
+                            if !editing { model.applyTempo() }
+                        }
+                    )
                         .disabled(!model.canEditTempo)
                         .accessibilityLabel("Tempo")
                         .accessibilityValue("\(Int(model.bpm)) beats per minute")
                 }
-                .onChange(of: model.bpm) { _ in model.applyTempo() }
+                .onChange(of: model.bpm) { _ in
+                    if !isDraggingTempo { model.applyTempo() }
+                }
 
                 Section("Metronome level") {
                     Slider(value: $model.gain, in: 0...1)
@@ -57,7 +69,9 @@ struct ContentView: View {
                     .buttonStyle(.borderedProminent)
                     .frame(maxWidth: .infinity)
                     .accessibilityIdentifier("metronome-transport")
-                    LabeledContent("Status", value: model.state.label)
+                    LabeledContent("Status", value: model.isPlaying
+                        ? "Metronome playing"
+                        : (model.state == .interrupted ? "Interrupted" : "Metronome stopped"))
                     Text(model.routeDescription).font(.footnote).foregroundStyle(.secondary)
                 }
 
@@ -78,9 +92,12 @@ struct ContentView: View {
 // the player, intent, or slider values of its siblings.
 private struct MediaSlotCard: View {
     @ObservedObject var media: MediaMixerViewModel
+    @ObservedObject var pip: VideoPiPCoordinator
     let foreground: Bool
     let compact: Bool
     @State private var showingFileImporter = false
+    @State private var isScrubbing = false
+    @State private var scrubPosition = 0.0
 
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 6 : 8) {
@@ -93,7 +110,12 @@ private struct MediaSlotCard: View {
                     .lineLimit(1)
             }
 
-            VideoSurface(player: media.player, isForeground: foreground)
+            VideoSurface(
+                player: media.player,
+                isForeground: foreground,
+                keepAttachedInBackground: media.slot == 0 && pip.shouldKeepLayerAttached,
+                onCanvasReady: media.slot == 0 ? { canvas in pip.attach(to: canvas) } : nil
+            )
                 .frame(height: compact ? 88 : 168)
                 .clipShape(RoundedRectangle(cornerRadius: 7))
                 .accessibilityIdentifier("media-preview-\(media.slot + 1)")
@@ -106,7 +128,7 @@ private struct MediaSlotCard: View {
                         .frame(maxWidth: .infinity, minHeight: 36)
                 }
                 .buttonStyle(.bordered)
-                .disabled(media.isImporting)
+                .disabled(media.isImporting || (media.slot == 0 && pip.isActive))
                 .accessibilityLabel("Import or replace Video \(media.slot + 1)")
                 .accessibilityIdentifier("media-import-\(media.slot + 1)")
 
@@ -120,6 +142,52 @@ private struct MediaSlotCard: View {
                 .disabled(!media.hasVideo || media.isImporting)
                 .accessibilityLabel("\(media.isPlaying ? "Pause" : "Play") Video \(media.slot + 1)")
                 .accessibilityIdentifier("media-transport-\(media.slot + 1)")
+            }
+
+            // Local timeline scrubbing: sliding does not pause any other
+            // video, the metronome, or the shared audio session.
+            if media.canSeek {
+                Slider(
+                    value: Binding(
+                        get: { isScrubbing ? scrubPosition : media.currentSeconds },
+                        set: { scrubPosition = $0 }
+                    ),
+                    in: 0...max(1, media.durationSeconds),
+                    onEditingChanged: { editing in
+                        if editing {
+                            scrubPosition = media.currentSeconds
+                        } else {
+                            media.seek(to: scrubPosition)
+                        }
+                        isScrubbing = editing
+                    }
+                )
+                .accessibilityLabel("Video \(media.slot + 1) timeline")
+                .accessibilityIdentifier("media-timeline-\(media.slot + 1)")
+                HStack {
+                    Text(MediaMixerViewModel.formatTimestamp(
+                        isScrubbing ? scrubPosition : media.currentSeconds))
+                    Spacer()
+                    Text(MediaMixerViewModel.formatTimestamp(media.durationSeconds))
+                }
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+            }
+            if media.slot == 0 {
+                Button {
+                    pip.toggle(for: media)
+                } label: {
+                    Label(pip.isActive ? "Close PiP" : "Start PiP",
+                          systemImage: "pip.enter")
+                }
+                .buttonStyle(.bordered)
+                .disabled(!media.hasVideo || !pip.isSupported)
+                .accessibilityIdentifier("media-pip-1")
+                if let pipError = pip.errorMessage {
+                    Text(pipError)
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                }
             }
 
             HStack(spacing: 4) {
@@ -166,13 +234,19 @@ private struct MediaSlotCard: View {
 struct VideoSurface: UIViewRepresentable {
     let player: AVPlayer?
     let isForeground: Bool
+    let keepAttachedInBackground: Bool
+    let onCanvasReady: ((PlayerCanvas) -> Void)?
 
     func makeUIView(context: Context) -> PlayerCanvas {
         PlayerCanvas()
     }
 
     func updateUIView(_ view: PlayerCanvas, context: Context) {
-        view.updatePresentation(player: player, isForeground: isForeground)
+        // A PiP transition keeps Video 1's source layer attached until iOS
+        // finishes moving its frames into the floating window.
+        view.updatePresentation(
+            player: player, isForeground: isForeground || keepAttachedInBackground)
+        onCanvasReady?(view)
     }
 }
 
@@ -202,7 +276,102 @@ final class PlayerCanvas: UIView {
     }
 }
 
+
+// Phase 2C: Only Video 1 may enter native Picture-in-Picture. A single app-
+// lifetime controller is attached to Video 1's real on-screen AVPlayerLayer.
+// Videos 2 and 3 are never registered for PiP; they stay audio-only when the
+// app backgrounds. Their playback is owned by AudioSessionCoordinator.
+@MainActor
+final class VideoPiPCoordinator: NSObject, ObservableObject, AVPictureInPictureControllerDelegate {
+    @Published private(set) var isActive = false
+    @Published private(set) var isStarting = false
+    @Published private(set) var errorMessage: String?
+
+    private var controller: AVPictureInPictureController?
+    private weak var canvas: PlayerCanvas?
+
+    var isSupported: Bool { AVPictureInPictureController.isPictureInPictureSupported() }
+    var shouldKeepLayerAttached: Bool { isActive || isStarting }
+
+    static func shouldAttachVideoLayer(foreground: Bool, pipActive: Bool,
+                                       pipStarting: Bool) -> Bool {
+        foreground || pipActive || pipStarting
+    }
+
+    func attach(to newCanvas: PlayerCanvas) {
+        guard isSupported, !isActive, !isStarting else { return }
+        guard canvas !== newCanvas || controller == nil else { return }
+        canvas = newCanvas
+        controller?.delegate = nil
+        controller = AVPictureInPictureController(playerLayer: newCanvas.playerLayer)
+        controller?.delegate = self
+    }
+
+    func toggle(for media: MediaMixerViewModel) {
+        guard media.slot == 0 else { return }
+        errorMessage = nil
+        if let controller, controller.isPictureInPictureActive {
+            controller.stopPictureInPicture()
+            return
+        }
+        guard isSupported else {
+            errorMessage = "Picture-in-Picture is unavailable on this device."
+            return
+        }
+        guard media.isPlaying else {
+            errorMessage = "Play Video 1 before starting Picture-in-Picture."
+            return
+        }
+        guard let controller, controller.isPictureInPicturePossible else {
+            errorMessage = "PiP is not ready. Keep Video 1 visible and playing, then try again."
+            return
+        }
+        isStarting = true
+        controller.startPictureInPicture()
+    }
+
+    nonisolated func pictureInPictureControllerDidStartPictureInPicture(
+        _ pictureInPictureController: AVPictureInPictureController
+    ) {
+        Task { @MainActor [weak self] in
+            self?.isStarting = false
+            self?.isActive = true
+            self?.errorMessage = nil
+        }
+    }
+
+    nonisolated func pictureInPictureController(
+        _ pictureInPictureController: AVPictureInPictureController,
+        failedToStartPictureInPictureWithError error: Error
+    ) {
+        let message = error.localizedDescription
+        Task { @MainActor [weak self] in
+            self?.isStarting = false
+            self?.isActive = false
+            self?.errorMessage = "Could not start PiP: \(message)"
+        }
+    }
+
+    nonisolated func pictureInPictureControllerDidStopPictureInPicture(
+        _ pictureInPictureController: AVPictureInPictureController
+    ) {
+        Task { @MainActor [weak self] in
+            self?.isActive = false
+            self?.isStarting = false
+        }
+    }
+
+    nonisolated func pictureInPictureController(
+        _ pictureInPictureController: AVPictureInPictureController,
+        restoreUserInterfaceForPictureInPictureStopWithCompletionHandler
+        completionHandler: @escaping (Bool) -> Void
+    ) {
+        // The only app screen already contains Video 1. iOS can restore it.
+        completionHandler(true)
+    }
+}
+
 #Preview {
     let audio = ParallelAudioContainer()
-    ContentView(model: audio.metronome, videos: audio.videos)
+    ContentView(model: audio.metronome, videos: audio.videos, pip: audio.pip)
 }

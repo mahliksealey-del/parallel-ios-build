@@ -1,4 +1,5 @@
 import AVFoundation
+import MetronomeEngine
 import XCTest
 @testable import Parallel
 
@@ -174,6 +175,111 @@ final class ParallelTests: XCTestCase {
         XCTAssertNil(canvas.playerLayer.player)
         canvas.updatePresentation(player: player, isForeground: true)
         XCTAssertTrue(canvas.playerLayer.player === player)
+    }
+
+    func testSeekTargetClampsAndRejectsInvalidDurations() {
+        XCTAssertEqual(MediaMixerViewModel.validatedSeekTime(-20, duration: 120), 0)
+        XCTAssertEqual(MediaMixerViewModel.validatedSeekTime(35.5, duration: 120), 35.5)
+        XCTAssertEqual(MediaMixerViewModel.validatedSeekTime(200, duration: 120), 120)
+        XCTAssertNil(MediaMixerViewModel.validatedSeekTime(20, duration: 0))
+        XCTAssertNil(MediaMixerViewModel.validatedSeekTime(.nan, duration: 120))
+        XCTAssertNil(MediaMixerViewModel.validatedSeekTime(10, duration: .infinity))
+    }
+
+    func testPlayerTimelineTimeFormatting() {
+        XCTAssertEqual(MediaMixerViewModel.formatTimestamp(0), "0:00")
+        XCTAssertEqual(MediaMixerViewModel.formatTimestamp(65.4), "1:05")
+        XCTAssertEqual(MediaMixerViewModel.formatTimestamp(3601.9), "60:01")
+        XCTAssertEqual(MediaMixerViewModel.formatTimestamp(.nan), "0:00")
+    }
+
+    func testSeekingWithoutMediaDoesNotActivateAudio() {
+        let f = makeFixture()
+        let video = MediaMixerViewModel(coordinator: f.coordinator, slot: 2)
+        video.seek(to: 20)
+        XCTAssertFalse(video.canSeek)
+        XCTAssertEqual(video.currentSeconds, 0)
+        XCTAssertEqual(f.session.activateCount, 0)
+        XCTAssertTrue(f.coordinator.requestedSources.isEmpty)
+    }
+
+    func testVideoOnePiPLayerPolicyDoesNotDisableBackgroundAudio() {
+        XCTAssertTrue(VideoPiPCoordinator.shouldAttachVideoLayer(
+            foreground: true, pipActive: false, pipStarting: false))
+        XCTAssertTrue(VideoPiPCoordinator.shouldAttachVideoLayer(
+            foreground: false, pipActive: false, pipStarting: true))
+        XCTAssertTrue(VideoPiPCoordinator.shouldAttachVideoLayer(
+            foreground: false, pipActive: true, pipStarting: false))
+        XCTAssertFalse(VideoPiPCoordinator.shouldAttachVideoLayer(
+            foreground: false, pipActive: false, pipStarting: false))
+    }
+
+    func testPiPControllerRejectsNonPrimarySlotWithoutChangingPlaybackIntent() {
+        let f = makeFixture()
+        let secondVideo = MediaMixerViewModel(coordinator: f.coordinator, slot: 1)
+        let pip = VideoPiPCoordinator()
+        pip.toggle(for: secondVideo)
+        XCTAssertFalse(pip.isActive)
+        XCTAssertFalse(pip.isStarting)
+        XCTAssertNil(pip.errorMessage)
+        XCTAssertTrue(f.coordinator.requestedSources.isEmpty)
+    }
+
+    func testMetronomeButtonResetsWhenVideosKeepSharedSessionActive() {
+        let f = makeFixture()
+        let video = FakeSource()
+        XCTAssertTrue(f.coordinator.register(video, for: .media(0)))
+        f.coordinator.requestPlayback(for: .media(0))
+        let engine = MetronomeEngine()
+        let vm = MetronomeViewModel(engine: engine, coordinator: f.coordinator)
+        XCTAssertFalse(vm.isPlaying)
+        vm.togglePlayback()
+        XCTAssertTrue(vm.isPlaying)
+        vm.togglePlayback()
+        XCTAssertFalse(vm.isPlaying)
+        XCTAssertEqual(f.coordinator.state, .active)
+        XCTAssertEqual(f.coordinator.requestedSources, Set([.media(0)]))
+        XCTAssertEqual(f.session.deactivateCount, 0)
+        XCTAssertEqual(video.stopCount, 0)
+        vm.togglePlayback()
+        XCTAssertTrue(vm.isPlaying)
+        XCTAssertEqual(f.session.activateCount, 1)
+    }
+
+    func testLiveMetronomeTempoRebuildDoesNotStopMediaOrReactivateSession() {
+        let f = makeFixture()
+        let video = FakeSource()
+        XCTAssertTrue(f.coordinator.register(video, for: .media(1)))
+        let engine = MetronomeEngine()
+        let vm = MetronomeViewModel(engine: engine, coordinator: f.coordinator)
+        f.coordinator.requestPlayback(for: .media(1))
+        vm.togglePlayback()
+        XCTAssertTrue(vm.isPlaying)
+        vm.bpm = 174
+        vm.applyTempo()
+        XCTAssertEqual(engine.bpm, 174)
+        XCTAssertEqual(f.graph.startCount, 2)
+        XCTAssertEqual(f.graph.stopCount, 1)
+        XCTAssertEqual(f.session.activateCount, 1)
+        XCTAssertEqual(f.session.deactivateCount, 0)
+        XCTAssertEqual(video.startCount, 1)
+        XCTAssertEqual(video.stopCount, 0)
+        XCTAssertTrue(vm.isPlaying)
+    }
+
+    func testFailedMetronomeTempoUpdatePreservesOtherVideos() {
+        let f = makeFixture()
+        let video = FakeSource()
+        XCTAssertTrue(f.coordinator.register(video, for: .media(2)))
+        f.coordinator.start()
+        f.coordinator.requestPlayback(for: .media(2))
+        XCTAssertThrowsError(try f.coordinator.reconfigureMetronome {
+            throw TestError.expected
+        })
+        XCTAssertEqual(f.coordinator.requestedSources, Set([.media(2)]))
+        XCTAssertEqual(f.session.deactivateCount, 0)
+        XCTAssertEqual(video.stopCount, 0)
+        XCTAssertEqual(f.coordinator.state, .active)
     }
 
     func testLaunchStatusMessage() {

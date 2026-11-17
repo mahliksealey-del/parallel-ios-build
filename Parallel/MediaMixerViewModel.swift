@@ -74,6 +74,8 @@ final class MediaMixerViewModel: ObservableObject, AudioPlaybackSource {
     @Published private(set) var errorMessage: String?
     @Published private(set) var isPlaying = false
     @Published private(set) var isImporting = false
+    @Published private(set) var durationSeconds = 0.0
+    @Published private(set) var currentSeconds = 0.0
     @Published var volume = 0.65
 
     private weak var coordinator: AudioSessionCoordinator?
@@ -82,6 +84,8 @@ final class MediaMixerViewModel: ObservableObject, AudioPlaybackSource {
     private var managedFile: URL?
     private var endObserver: NSObjectProtocol?
     private var failedObserver: NSObjectProtocol?
+    private var observedPlayer: AVPlayer?
+    private var timeObserver: Any?
     private var itemToken = UUID()
 
     init(coordinator: AudioSessionCoordinator, slot: Int = 0) {
@@ -93,6 +97,28 @@ final class MediaMixerViewModel: ObservableObject, AudioPlaybackSource {
     }
 
     var hasVideo: Bool { player != nil }
+    var canSeek: Bool { hasVideo && durationSeconds.isFinite && durationSeconds > 0 }
+
+    static func validatedSeekTime(_ requested: Double, duration: Double) -> Double? {
+        guard requested.isFinite, duration.isFinite, duration > 0 else { return nil }
+        return min(max(0, requested), duration)
+    }
+
+    static func formatTimestamp(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
+        let totalSeconds = Int(seconds)
+        return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
+    }
+
+    // Seek only this player's timeline; leave coordinator source intent and
+    // the other two independent AVPlayers untouched.
+    func seek(to seconds: Double) {
+        guard let player,
+              let target = Self.validatedSeekTime(seconds, duration: durationSeconds) else { return }
+        currentSeconds = target
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 600),
+                    toleranceBefore: .zero, toleranceAfter: .zero)
+    }
 
     // Video presentation is detached when the app becomes inactive, so
     // AVPlayer should retain its audio transport while in the background.
@@ -145,6 +171,7 @@ final class MediaMixerViewModel: ObservableObject, AudioPlaybackSource {
             let asset = AVURLAsset(url: localFile)
             let playable = try await asset.load(.isPlayable)
             let tracks = try await asset.loadTracks(withMediaType: .video)
+            let duration = try await asset.load(.duration)
             guard playable, !tracks.isEmpty else { throw MediaImportError.invalidVideo }
 
             let nextItem = AVPlayerItem(asset: asset)
@@ -160,8 +187,11 @@ final class MediaMixerViewModel: ObservableObject, AudioPlaybackSource {
             fileName = source.lastPathComponent
             managedFile = localFile
             isPlaying = false
+            currentSeconds = 0
+            durationSeconds = (duration.isNumeric && duration.seconds.isFinite && duration.seconds > 0)
+                ? duration.seconds : 0
             status = "Ready to play"
-            observe(item: nextItem)
+            observe(item: nextItem, player: nextPlayer)
             if let oldFile { ManagedVideoFileStore.delete(oldFile) }
         } catch {
             if let copiedFile { ManagedVideoFileStore.delete(copiedFile) }
@@ -194,9 +224,18 @@ final class MediaMixerViewModel: ObservableObject, AudioPlaybackSource {
         status = "Restoring playback"
     }
 
-    private func observe(item: AVPlayerItem) {
+    private func observe(item: AVPlayerItem, player: AVPlayer) {
         itemToken = UUID()
         let token = itemToken
+        observedPlayer = player
+        timeObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main
+        ) { [weak self] time in
+            Task { @MainActor [weak self] in
+                guard let self, self.itemToken == token, time.seconds.isFinite else { return }
+                self.currentSeconds = min(max(0, time.seconds), max(0, self.durationSeconds))
+            }
+        }
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
         ) { [weak self] _ in
@@ -225,12 +264,16 @@ final class MediaMixerViewModel: ObservableObject, AudioPlaybackSource {
     private func removeObservers() {
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         if let failedObserver { NotificationCenter.default.removeObserver(failedObserver) }
+        if let timeObserver, let observedPlayer { observedPlayer.removeTimeObserver(timeObserver) }
         endObserver = nil
         failedObserver = nil
+        timeObserver = nil
+        observedPlayer = nil
     }
 
     deinit {
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         if let failedObserver { NotificationCenter.default.removeObserver(failedObserver) }
+        if let timeObserver, let observedPlayer { observedPlayer.removeTimeObserver(timeObserver) }
     }
 }

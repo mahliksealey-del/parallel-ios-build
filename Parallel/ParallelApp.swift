@@ -10,6 +10,7 @@ final class ParallelAudioContainer: ObservableObject {
     // The legacy "media" alias retains Video 1 identity from the validated build.
     let media: MediaMixerViewModel
     let videos: [MediaMixerViewModel]
+    let pip: VideoPiPCoordinator
 
     init() {
         let engine = MetronomeEngine()
@@ -23,6 +24,7 @@ final class ParallelAudioContainer: ObservableObject {
         metronome = MetronomeViewModel(engine: engine, coordinator: coordinator)
         media = slots[0]
         videos = slots
+        pip = VideoPiPCoordinator()
 
         // A failure in one player must not overwrite the status of another.
         coordinator.onSourceError = { [weak self] source, message in
@@ -39,7 +41,7 @@ struct ParallelApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(model: audio.metronome, videos: audio.videos)
+            ContentView(model: audio.metronome, videos: audio.videos, pip: audio.pip)
         }
     }
 }
