@@ -49,7 +49,9 @@ enum ManagedVideoFileStore {
                 throw MediaImportError.invalidVideo
             }
             var backupURL = destination
-            try? backupURL.setResourceValue(true, forKey: .isExcludedFromBackupKey)
+            var resourceValues = URLResourceValues()
+            resourceValues.isExcludedFromBackup = true
+            try? backupURL.setResourceValues(resourceValues)
             return destination
         } catch {
             try? manager.removeItem(at: destination)
