@@ -13,9 +13,14 @@ protocol AudioSessionControlling: AnyObject {
     var outputNumberOfChannels: Int { get }
     var ioBufferDuration: TimeInterval { get }
     var outputNames: [String] { get }
+    var hasStereoHeadphoneOutput: Bool { get }
     func configureForMixedPlayback() throws
     func activate() throws
     func deactivate() throws
+}
+
+extension AudioSessionControlling {
+    var hasStereoHeadphoneOutput: Bool { false }
 }
 
 final class SystemAudioSession: AudioSessionControlling {
@@ -24,6 +29,9 @@ final class SystemAudioSession: AudioSessionControlling {
     var outputNumberOfChannels: Int { session.outputNumberOfChannels }
     var ioBufferDuration: TimeInterval { session.ioBufferDuration }
     var outputNames: [String] { session.currentRoute.outputs.map(\.portName) }
+    var hasStereoHeadphoneOutput: Bool {
+        PsychoacousticOutputPolicy.stereoHeadphonesAvailable(session)
+    }
     func configureForMixedPlayback() throws {
         try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
     }
@@ -34,11 +42,13 @@ final class SystemAudioSession: AudioSessionControlling {
 enum AudioSourceID: Hashable {
     case metronome
     case media(Int)
+    case psychoacoustic
 
     fileprivate var sortKey: Int {
         switch self {
         case .metronome: return 0
         case .media(let slot): return slot + 1
+        case .psychoacoustic: return 4
         }
     }
 }
@@ -64,6 +74,7 @@ final class AudioSessionCoordinator {
     private let session: AudioSessionControlling
     private let graph: AudioGraphControlling
     private let notificationCenter: NotificationCenter
+    private let emergencyRouteDisarm: @Sendable () -> Void
     private var sources: [AudioSourceID: AudioPlaybackSource]
     private(set) var requestedSources: Set<AudioSourceID> = []
     private var sessionActivated = false
@@ -78,11 +89,13 @@ final class AudioSessionCoordinator {
     init(session: AudioSessionControlling = SystemAudioSession(),
          graph: AudioGraphControlling,
          notificationCenter: NotificationCenter = .default,
-         observeSystemNotifications: Bool = true) {
+         observeSystemNotifications: Bool = true,
+         emergencyRouteDisarm: @escaping @Sendable () -> Void = {}) {
         self.session = session
         self.graph = graph
         self.sources = [.metronome: graph]
         self.notificationCenter = notificationCenter
+        self.emergencyRouteDisarm = emergencyRouteDisarm
         graph.onConfigurationChange = { [weak self] in self?.engineConfigurationChanged() }
         if observeSystemNotifications { installObservers() }
     }
@@ -193,6 +206,7 @@ final class AudioSessionCoordinator {
     }
 
     func outputDeviceWasRemoved() {
+        emergencyRouteDisarm()
         guard !requestedSources.isEmpty else { return }
         for id in requestedSources { sources[id]?.stop() }
         requestedSources.removeAll()
@@ -200,7 +214,15 @@ final class AudioSessionCoordinator {
         state = .failed("Audio output disconnected. Playback stopped to reduce the risk of speaker fallback.")
     }
 
-    func routeChanged() { refreshRoute() }
+    func routeChanged() {
+        refreshRoute()
+        if requestedSources.contains(.psychoacoustic)
+           && !session.hasStereoHeadphoneOutput {
+            stopPlayback(for: .psychoacoustic)
+            onSourceError?(.psychoacoustic,
+                PsychoacousticAudioError.headphonesRequired.localizedDescription)
+        }
+    }
 
     func mediaServicesWereLost() {
         guard !requestedSources.isEmpty else { return }
@@ -215,30 +237,33 @@ final class AudioSessionCoordinator {
     }
 
     func engineConfigurationChanged() {
-        guard requestedSources.contains(.metronome), state == .active else { return }
+        // The graph's configuration-change callback already stopped its PCM
+        // nodes. Restart only requested generated sources; do not restart,
+        // seek, or reconfigure the three independent AVPlayers.
+        let generated: [AudioSourceID] = [.metronome, .psychoacoustic]
+            .filter { requestedSources.contains($0) }
+        guard !generated.isEmpty, sessionActivated else { return }
         state = .recovering
-        graph.markRecovering()
-        do {
-            refreshRoute()
-            guard session.sampleRate.isFinite, session.sampleRate > 0 else {
-                throw InvalidAudioRoute.sampleRate
-            }
-            try graph.start(sampleRate: session.sampleRate)
-            state = .active
-        } catch {
-            graph.stop()
-            requestedSources.remove(.metronome)
-            onSourceError?(.metronome, error.localizedDescription)
-            if requestedSources.isEmpty {
-                do {
-                    try deactivateSessionIfNeeded()
-                    state = .failed(error.localizedDescription)
-                } catch {
-                    state = .failed("Recovery and session deactivation failed: \(error.localizedDescription)")
+        for id in generated { sources[id]?.markRecovering() }
+        refreshRoute()
+
+        for id in generated {
+            do {
+                guard session.sampleRate.isFinite, session.sampleRate > 0 else {
+                    throw InvalidAudioRoute.sampleRate
                 }
-            } else {
-                state = .active
+                try sources[id]?.start(sampleRate: session.sampleRate)
+            } catch {
+                sources[id]?.stop()
+                requestedSources.remove(id)
+                onSourceError?(id, error.localizedDescription)
             }
+        }
+        if requestedSources.isEmpty {
+            try? deactivateSessionIfNeeded()
+            state = .failed("Generated audio could not recover after a route change.")
+        } else {
+            state = .active
         }
     }
 
@@ -293,10 +318,17 @@ final class AudioSessionCoordinator {
         ) { [weak self] notification in
             Task { @MainActor in self?.handleInterruption(notification) }
         })
+        let emergencyDisarm = emergencyRouteDisarm
         observers.append(notificationCenter.addObserver(
             forName: AVAudioSession.routeChangeNotification,
             object: sessionObject, queue: .main
         ) { [weak self] notification in
+            let reason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+            if reason.flatMap(AVAudioSession.RouteChangeReason.init(rawValue:))
+                == .oldDeviceUnavailable {
+                // This atomic disarm happens BEFORE the MainActor hop.
+                emergencyDisarm()
+            }
             Task { @MainActor in self?.handleRouteChange(notification) }
         })
         observers.append(notificationCenter.addObserver(

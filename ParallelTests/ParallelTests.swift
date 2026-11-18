@@ -531,6 +531,72 @@ final class ParallelTests: XCTestCase {
         XCTAssertTrue(f.coordinator.requestedSources.isEmpty)
     }
 
+    func testPsychoacousticTransportDoesNotInterruptVideoOrMetronome() {
+        let f = makeFixture()
+        let video = FakeSource()
+        let psycho = FakeSource()
+        XCTAssertTrue(f.coordinator.register(video, for: .media(2)))
+        XCTAssertTrue(f.coordinator.register(psycho, for: .psychoacoustic))
+        f.coordinator.start()
+        f.coordinator.requestPlayback(for: .media(2))
+        f.coordinator.requestPlayback(for: .psychoacoustic)
+        XCTAssertEqual(f.session.activateCount, 1)
+        XCTAssertEqual(f.graph.startCount, 1)
+        XCTAssertEqual(psycho.startCount, 1)
+        XCTAssertEqual(video.startCount, 1)
+
+        f.coordinator.stop() // Only metronome
+        XCTAssertEqual(f.graph.stopCount, 1)
+        XCTAssertEqual(psycho.stopCount, 0)
+        XCTAssertEqual(video.stopCount, 0)
+        XCTAssertEqual(f.session.deactivateCount, 0)
+        XCTAssertEqual(f.coordinator.state, .active)
+
+        f.coordinator.stopPlayback(for: .psychoacoustic)
+        XCTAssertEqual(psycho.stopCount, 1)
+        XCTAssertEqual(video.stopCount, 0)
+        XCTAssertEqual(f.session.deactivateCount, 0)
+        f.coordinator.stopPlayback(for: .media(2))
+        XCTAssertEqual(f.session.deactivateCount, 1)
+    }
+
+    func testPsychoacousticRouteChangeFailsClosedWithoutStoppingVideo() {
+        let f = makeFixture()
+        let video = FakeSource()
+        let psycho = FakeSource()
+        XCTAssertTrue(f.coordinator.register(video, for: .media(0)))
+        XCTAssertTrue(f.coordinator.register(psycho, for: .psychoacoustic))
+        f.session.hasStereoHeadphoneOutput = true
+        f.coordinator.requestPlayback(for: .media(0))
+        f.coordinator.requestPlayback(for: .psychoacoustic)
+        XCTAssertEqual(psycho.startCount, 1)
+        f.session.hasStereoHeadphoneOutput = false
+        f.coordinator.routeChanged()
+        XCTAssertFalse(f.coordinator.requestedSources.contains(.psychoacoustic))
+        XCTAssertTrue(f.coordinator.requestedSources.contains(.media(0)))
+        XCTAssertEqual(psycho.stopCount, 1)
+        XCTAssertEqual(video.stopCount, 0)
+        XCTAssertEqual(f.coordinator.state, .active)
+        XCTAssertEqual(f.session.deactivateCount, 0)
+    }
+
+    func testPsychoacousticConfigurationRecoveryDoesNotRestartVideo() {
+        let f = makeFixture()
+        let video = FakeSource()
+        let psycho = FakeSource()
+        XCTAssertTrue(f.coordinator.register(video, for: .media(1)))
+        XCTAssertTrue(f.coordinator.register(psycho, for: .psychoacoustic))
+        f.coordinator.requestPlayback(for: .media(1))
+        f.coordinator.requestPlayback(for: .psychoacoustic)
+        f.graph.onConfigurationChange?()
+        XCTAssertEqual(video.startCount, 1)
+        XCTAssertEqual(video.stopCount, 0)
+        XCTAssertEqual(psycho.startCount, 2)
+        XCTAssertEqual(psycho.recoveryCount, 1)
+        XCTAssertEqual(f.session.activateCount, 1)
+        XCTAssertEqual(f.coordinator.state, .active)
+    }
+
     private func makeFixture() -> (coordinator: AudioSessionCoordinator, session: FakeSession, graph: FakeGraph) {
         let session = FakeSession()
         let graph = FakeGraph()
@@ -546,6 +612,7 @@ private final class FakeSession: AudioSessionControlling {
     var outputNumberOfChannels = 2
     var ioBufferDuration = 0.005
     var outputNames = ["Test headphones"]
+    var hasStereoHeadphoneOutput = true
     var configureCount = 0
     var activateCount = 0
     var deactivateCount = 0

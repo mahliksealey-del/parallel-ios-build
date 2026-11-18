@@ -9,8 +9,12 @@ struct ContentView: View {
     @ObservedObject var model: MetronomeViewModel
     let videos: [MediaMixerViewModel]
     @ObservedObject var pip: VideoPiPCoordinator
+    @ObservedObject var psychoacoustic: PsychoacousticViewModel
     @Environment(\.scenePhase) private var scenePhase
     @State private var isDraggingTempo = false
+    @State private var isDraggingCarrier = false
+    @State private var isDraggingBeat = false
+    @State private var isDraggingPsychoGain = false
 
     var body: some View {
         NavigationStack {
@@ -73,6 +77,66 @@ struct ContentView: View {
                         ? "Metronome playing"
                         : (model.state == .interrupted ? "Interrupted" : "Metronome stopped"))
                     Text(model.routeDescription).font(.footnote).foregroundStyle(.secondary)
+                }
+
+                Section("PsychoacousticEngine · Stereo binaural") {
+                    Text("Experimental audio synthesis. Stereo headphones required. No medical or performance effects are implied.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+
+                    LabeledContent("Left carrier",
+                                   value: "\(Int(psychoacoustic.carrierHz)) Hz")
+                    Slider(value: $psychoacoustic.carrierHz, in: 100...800, step: 1,
+                           onEditingChanged: { editing in
+                        isDraggingCarrier = editing
+                        if !editing { psychoacoustic.applyFrequencies() }
+                    })
+                    .accessibilityLabel("Left carrier frequency")
+                    .onChange(of: psychoacoustic.carrierHz) { _ in
+                        if !isDraggingCarrier { psychoacoustic.applyFrequencies() }
+                    }
+
+                    LabeledContent("Binaural difference",
+                                   value: "\(Int(psychoacoustic.beatHz)) Hz")
+                    Slider(value: $psychoacoustic.beatHz, in: 1...40, step: 1,
+                           onEditingChanged: { editing in
+                        isDraggingBeat = editing
+                        if !editing { psychoacoustic.applyFrequencies() }
+                    })
+                    .accessibilityLabel("Binaural frequency difference")
+                    .onChange(of: psychoacoustic.beatHz) { _ in
+                        if !isDraggingBeat { psychoacoustic.applyFrequencies() }
+                    }
+                    LabeledContent("Right carrier",
+                                   value: "\(Int(psychoacoustic.carrierHz + psychoacoustic.beatHz)) Hz")
+
+                    LabeledContent("Psychoacoustic level",
+                                   value: "\(Int(psychoacoustic.gain * 100))%")
+                    Slider(value: $psychoacoustic.gain, in: 0...0.25,
+                           onEditingChanged: { editing in
+                        isDraggingPsychoGain = editing
+                        if !editing { psychoacoustic.applyGain() }
+                    })
+                    .accessibilityLabel("Psychoacoustic level")
+                    .onChange(of: psychoacoustic.gain) { _ in
+                        if !isDraggingPsychoGain { psychoacoustic.applyGain() }
+                    }
+                    Button(psychoacoustic.isPlaying
+                           ? "Stop Psychoacoustic Audio"
+                           : "Start Psychoacoustic Audio") {
+                        psychoacoustic.togglePlayback()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .frame(maxWidth: .infinity)
+                    .accessibilityIdentifier("psychoacoustic-transport")
+                    LabeledContent("Status", value: psychoacoustic.isPlaying
+                                   ? "Playing in stereo headphones" : "Stopped")
+                }
+
+                if let error = psychoacoustic.errorMessage {
+                    Section("Psychoacoustic audio problem") {
+                        Text(error).foregroundStyle(.red)
+                    }
                 }
 
                 if let error = model.errorMessage {
