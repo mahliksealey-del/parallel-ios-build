@@ -437,5 +437,6 @@ final class VideoPiPCoordinator: NSObject, ObservableObject, AVPictureInPictureC
 
 #Preview {
     let audio = ParallelAudioContainer()
-    ContentView(model: audio.metronome, videos: audio.videos, pip: audio.pip)
+    ContentView(model: audio.metronome, videos: audio.videos,
+                pip: audio.pip, psychoacoustic: audio.psychoacoustic)
 }
