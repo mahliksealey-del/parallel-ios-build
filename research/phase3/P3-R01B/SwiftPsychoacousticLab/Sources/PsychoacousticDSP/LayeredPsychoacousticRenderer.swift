@@ -87,6 +87,21 @@ public struct LayeredPsychoacousticRenderer: Sendable {
         }
     }
 
+    public mutating func setMode(_ next: PsychoacousticMode) { mode = next }
+
+    public mutating func setNoiseLevels(_ next: NoiseLevels) { noise = next }
+
+    public mutating func setFrequencies(carrierHz: Double, beatHz: Double) {
+        precondition(carrierHz >= 20 && carrierHz + beatHz < sampleRate / 2 && beatHz > 0)
+        self.carrierHz = carrierHz
+        self.beatHz = beatHz
+    }
+
+    public mutating func setToneGain(_ next: Double) {
+        precondition(next.isFinite && (0...1).contains(next))
+        toneGain = next
+    }
+
     private mutating func nextWhite() -> Double {
         randomState ^= randomState << 13
         randomState ^= randomState >> 7

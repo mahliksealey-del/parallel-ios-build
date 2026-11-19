@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import MetronomeEngine
+import PsychoacousticDSP
 
 // All transports use the existing application audio session.
 @MainActor
@@ -79,7 +80,9 @@ final class AudioGraphCoordinator: AudioGraphControlling {
         sampleRate: Double,
         leftHz: Double,
         rightHz: Double,
-        gain: Double
+        gain: Double,
+        mode: PsychoacousticMode = .binaural,
+        noise: NoiseLevels = .init()
     ) throws {
         guard !psychoacousticActive else { return }
         // Verify again immediately before arming the atomic audio gate.
@@ -89,7 +92,7 @@ final class AudioGraphCoordinator: AudioGraphControlling {
         let graph = try ensureGraph(sampleRate: sampleRate)
         let nodes = try PsychoacousticAudioNodes.make(
             sampleRate: sampleRate, leftHz: leftHz, rightHz: rightHz,
-            targetGain: gain
+            targetGain: gain, mode: mode, noise: noise
         )
         emergencyRelay.bind(nodes.owner)
         graph.attach(nodes.source)
@@ -139,6 +142,14 @@ final class AudioGraphCoordinator: AudioGraphControlling {
         guard psychoacousticActive, let nodes = psychoacousticNodes,
               let sampleRate else { return false }
         return nodes.setGain(gain, fadeFrames: Int(sampleRate * 0.04))
+    }
+
+    func updatePsychoacousticMode(_ mode: PsychoacousticMode) -> Bool {
+        psychoacousticNodes?.setMode(mode) ?? false
+    }
+
+    func updatePsychoacousticNoise(_ noise: NoiseLevels) -> Bool {
+        psychoacousticNodes?.setNoise(noise) ?? false
     }
 
     func markInterrupted() {

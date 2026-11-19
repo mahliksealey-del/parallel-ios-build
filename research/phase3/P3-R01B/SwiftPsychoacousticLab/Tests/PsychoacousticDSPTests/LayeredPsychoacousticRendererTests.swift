@@ -54,6 +54,27 @@ final class LayeredPsychoacousticRendererTests: XCTestCase {
         XCTAssertEqual(expected.right, actualRight)
     }
 
+    func testRealtimeLayerCommandsChangeModeAndNoiseWithoutStopping() throws {
+        let owner = try XCTUnwrap(RealtimeControlOwner(sampleRate: 48_000))
+        owner.armAfterVerifiedStereoRoute()
+        var stream = RealtimeControlledLayeredStream(
+            renderer: .init(sampleRate: 48_000, mode: .binaural,
+                            carrierHz: 200, beatHz: 10, toneGain: 0.3),
+            control: owner.makeRenderPort()
+        )
+        XCTAssertTrue(owner.sendMode(.monaural))
+        XCTAssertTrue(owner.sendNoise(.init(white: 0.1, pink: 0.05, brown: 0.02)))
+        var output = StereoPCMBuffer(frameCount: 2_048)
+        output.left.withUnsafeMutableBufferPointer { left in
+            output.right.withUnsafeMutableBufferPointer { right in
+                stream.render(into: left, right: right)
+            }
+        }
+        XCTAssertEqual(output.left, output.right)
+        XCTAssertTrue(output.interleaved.allSatisfy { $0.isFinite && abs($0) < 1 })
+        XCTAssertFalse(stream.isStopped)
+    }
+
     private func render(mode: PsychoacousticMode, frames: Int, gain: Double = 0.4) -> StereoPCMBuffer {
         var renderer = LayeredPsychoacousticRenderer(sampleRate: 48_000, mode: mode,
             carrierHz: 200, beatHz: 10, toneGain: gain)

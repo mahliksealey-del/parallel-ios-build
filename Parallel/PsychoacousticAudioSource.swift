@@ -74,12 +74,12 @@ enum PsychoacousticOutputPolicy {
 /// Exactly one AVAudioSourceNode render callback owns and mutates this stream.
 /// The owner is kept strongly alive until the graph has stopped and detached.
 private final class PsychoacousticRenderBox: @unchecked Sendable {
-    private var stream: RealtimeControlledStereoStream
+    private var stream: RealtimeControlledLayeredStream
     private let owner: RealtimeControlOwner
 
-    init(owner: RealtimeControlOwner, renderer: StereoPCMRenderer) {
+    init(owner: RealtimeControlOwner, renderer: LayeredPsychoacousticRenderer) {
         self.owner = owner
-        stream = RealtimeControlledStereoStream(
+        stream = RealtimeControlledLayeredStream(
             renderer: renderer,
             control: owner.makeRenderPort()
         )
@@ -123,7 +123,8 @@ struct PsychoacousticAudioNodes {
     let owner: RealtimeControlOwner
 
     static func make(sampleRate: Double, leftHz: Double, rightHz: Double,
-                     targetGain: Double) throws -> PsychoacousticAudioNodes {
+                     targetGain: Double, mode: PsychoacousticMode,
+                     noise: NoiseLevels) throws -> PsychoacousticAudioNodes {
         guard sampleRate.isFinite, sampleRate >= 8_000,
               let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2),
               !format.isInterleaved,
@@ -141,18 +142,12 @@ struct PsychoacousticAudioNodes {
             throw PsychoacousticAudioError.invalidParameters
         }
 
-        let renderer = StereoPCMRenderer(
-            sampleRate: sampleRate,
-            leftFrequency: leftHz,
-            rightFrequency: rightHz,
-            gain: 0
+        let renderer = LayeredPsychoacousticRenderer(
+            sampleRate: sampleRate, mode: mode, carrierHz: leftHz,
+            beatHz: rightHz - leftHz, toneGain: targetGain, noise: noise
         )
         // The actual AVAudioSession route was checked by the caller.
         owner.armAfterVerifiedStereoRoute()
-        guard owner.sendGain(targetGain, fadeFrames: Int(sampleRate * 0.08)) else {
-            owner.disarmImmediately()
-            throw PsychoacousticAudioError.controlQueueFull
-        }
         let box = PsychoacousticRenderBox(owner: owner, renderer: renderer)
         let source = AVAudioSourceNode(format: format) { _, _, frameCount, bufferList in
             box.render(frameCount, bufferList)
@@ -172,4 +167,10 @@ struct PsychoacousticAudioNodes {
     func setGain(_ gain: Double, fadeFrames: Int) -> Bool {
         owner.sendGain(gain, fadeFrames: fadeFrames)
     }
+
+    @discardableResult
+    func setMode(_ mode: PsychoacousticMode) -> Bool { owner.sendMode(mode) }
+
+    @discardableResult
+    func setNoise(_ noise: NoiseLevels) -> Bool { owner.sendNoise(noise) }
 }

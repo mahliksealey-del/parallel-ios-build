@@ -4,6 +4,7 @@ import Combine
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
+import PsychoacousticDSP
 
 struct ContentView: View {
     @ObservedObject var model: MetronomeViewModel
@@ -88,7 +89,7 @@ struct ContentView: View {
                     Text(model.routeDescription).font(.footnote).foregroundStyle(.secondary)
                 }
 
-                Section("PsychoacousticEngine · Stereo binaural") {
+                Section("PsychoacousticEngine") {
                     Text("Experimental audio synthesis. Stereo headphones required. No medical or performance effects are implied.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -121,6 +122,20 @@ struct ContentView: View {
                     Text("This labels the sound's frequency difference, not your measured brainwaves.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+
+                    Picker("Generation mode", selection: $psychoacoustic.mode) {
+                        Text("Binaural · separate ears").tag(PsychoacousticMode.binaural)
+                        Text("Monaural · mixed tones").tag(PsychoacousticMode.monaural)
+                        Text("Isochronic · pulsed tone").tag(PsychoacousticMode.isochronic)
+                    }
+                    .onChange(of: psychoacoustic.mode) { _ in psychoacoustic.applyLayers() }
+                    Text(psychoacoustic.mode == .binaural
+                         ? "Each ear receives a different carrier; stereo headphones are required."
+                         : psychoacoustic.mode == .monaural
+                         ? "Both ears receive the same two-tone amplitude pattern."
+                         : "Both ears receive a smoothly gated tone at the selected pulse rate.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     LabeledContent("Right carrier",
                                    value: "\(Int(psychoacoustic.carrierHz + psychoacoustic.beatHz)) Hz")
 
@@ -150,6 +165,38 @@ struct ContentView: View {
                                    ? "Playing in stereo headphones" : "Stopped")
                 }
 
+                Section("Procedural noise layers") {
+                    noiseSlider("White noise", value: $psychoacoustic.whiteNoise)
+                    noiseSlider("Pink noise", value: $psychoacoustic.pinkNoise)
+                    noiseSlider("Brown noise", value: $psychoacoustic.brownNoise)
+                    Text("Original deterministic generators. Levels are capped at 20% and mixed through a digital peak limiter.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .onChange(of: psychoacoustic.whiteNoise) { _ in psychoacoustic.applyLayers() }
+                .onChange(of: psychoacoustic.pinkNoise) { _ in psychoacoustic.applyLayers() }
+                .onChange(of: psychoacoustic.brownNoise) { _ in psychoacoustic.applyLayers() }
+
+                Section("Presets and session") {
+                    HStack {
+                        Button("Focus") { psychoacoustic.applyPreset(.focus) }
+                        Button("Calm") { psychoacoustic.applyPreset(.calm) }
+                        Button("Rest") { psychoacoustic.applyPreset(.rest) }
+                    }
+                    Picker("Stop after", selection: $psychoacoustic.sessionMinutes) {
+                        Text("Manual").tag(0)
+                        Text("5 minutes").tag(5)
+                        Text("15 minutes").tag(15)
+                        Text("30 minutes").tag(30)
+                    }
+                    .onChange(of: psychoacoustic.sessionMinutes) { _ in
+                        psychoacoustic.applySessionTimer()
+                    }
+                    Text("At completion, generated audio fades to silence and stops. Saved settings never start playback automatically.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
                 if let error = psychoacoustic.errorMessage {
                     Section("Psychoacoustic audio problem") {
                         Text(error).foregroundStyle(.red)
@@ -164,6 +211,14 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("Parallel")
+        }
+    }
+
+    private func noiseSlider(_ title: String, value: Binding<Double>) -> some View {
+        VStack(alignment: .leading) {
+            LabeledContent(title, value: "\(Int(value.wrappedValue * 100))%")
+            Slider(value: value, in: 0...0.2)
+                .accessibilityLabel(title)
         }
     }
 }

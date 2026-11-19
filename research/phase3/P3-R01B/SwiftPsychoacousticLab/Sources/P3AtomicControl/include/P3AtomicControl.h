@@ -21,6 +21,8 @@ typedef struct {
 enum {
     P3_CONTROL_FREQUENCIES = 1,
     P3_CONTROL_GAIN = 2,
+    P3_CONTROL_MODE = 3,
+    P3_CONTROL_NOISE = 4,
     P3_CONTROL_CAPACITY = 64
 };
 

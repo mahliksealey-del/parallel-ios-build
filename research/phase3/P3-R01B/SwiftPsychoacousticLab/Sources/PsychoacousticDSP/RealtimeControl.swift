@@ -56,6 +56,23 @@ public final class RealtimeControlOwner: @unchecked Sendable {
         return p3_control_send(storage, command)
     }
 
+    @discardableResult
+    public func sendMode(_ mode: PsychoacousticMode) -> Bool {
+        let raw = PsychoacousticMode.allCases.firstIndex(of: mode) ?? 0
+        return p3_control_send(storage, p3_control_command(
+            kind: UInt32(P3_CONTROL_MODE), left_hz: 0, right_hz: 0,
+            gain: Double(raw), transition_frames: 0
+        ))
+    }
+
+    @discardableResult
+    public func sendNoise(_ levels: NoiseLevels) -> Bool {
+        p3_control_send(storage, p3_control_command(
+            kind: UInt32(P3_CONTROL_NOISE), left_hz: levels.white,
+            right_hz: levels.pink, gain: levels.brown, transition_frames: 0
+        ))
+    }
+
     /// CONTROL QUEUE ONLY: require the higher-level iOS route policy to first
     /// verify stereo headphones. This API does not detect physical routes.
     public func armAfterVerifiedStereoRoute() { p3_control_arm(storage) }
@@ -65,6 +82,60 @@ public final class RealtimeControlOwner: @unchecked Sendable {
     public func disarmImmediately() { p3_control_disarm(storage) }
 
     public var gateSnapshot: UInt64 { p3_control_gate_snapshot(storage) }
+}
+
+public struct RealtimeControlledLayeredStream {
+    private var renderer: LayeredPsychoacousticRenderer
+    private let control: RealtimeControlRenderPort
+    private let initialGeneration: UInt64
+    public private(set) var isStopped: Bool
+
+    public init(renderer: LayeredPsychoacousticRenderer,
+                control: RealtimeControlRenderPort) {
+        self.renderer = renderer
+        self.control = control
+        let gate = control.gateSnapshot
+        initialGeneration = gate >> 1
+        isStopped = (gate & 1) == 0
+    }
+
+    public mutating func render(into left: UnsafeMutableBufferPointer<Float>,
+                                right: UnsafeMutableBufferPointer<Float>) {
+        guard !isStopped, isGateValid else { isStopped = true; zero(left, right); return }
+        for _ in 0..<Int(P3_CONTROL_CAPACITY) {
+            guard let command = control.dequeue() else { break }
+            switch command.kind {
+            case UInt32(P3_CONTROL_FREQUENCIES):
+                renderer.setFrequencies(carrierHz: command.left_hz,
+                                        beatHz: command.right_hz - command.left_hz)
+            case UInt32(P3_CONTROL_GAIN):
+                renderer.setToneGain(command.gain)
+            case UInt32(P3_CONTROL_MODE):
+                let index = Int(command.gain)
+                if PsychoacousticMode.allCases.indices.contains(index) {
+                    renderer.setMode(PsychoacousticMode.allCases[index])
+                }
+            case UInt32(P3_CONTROL_NOISE):
+                renderer.setNoiseLevels(.init(white: command.left_hz,
+                                              pink: command.right_hz,
+                                              brown: command.gain))
+            default: continue
+            }
+        }
+        guard isGateValid else { isStopped = true; zero(left, right); return }
+        renderer.render(into: left, right: right)
+        if !isGateValid { isStopped = true; zero(left, right) }
+    }
+
+    private var isGateValid: Bool {
+        let gate = control.gateSnapshot
+        return (gate & 1) != 0 && gate >> 1 == initialGeneration
+    }
+
+    private func zero(_ left: UnsafeMutableBufferPointer<Float>,
+                      _ right: UnsafeMutableBufferPointer<Float>) {
+        for index in left.indices { left[index] = 0; right[index] = 0 }
+    }
 }
 
 /// Non-owning raw C11 atomic mailbox read port. Used on exactly ONE audio
