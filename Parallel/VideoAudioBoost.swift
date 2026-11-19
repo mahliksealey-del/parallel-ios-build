@@ -90,11 +90,12 @@ enum VideoAudioBoostFactory {
                 ).takeUnretainedValue().process(bufferList, frames: Int(framesOut.pointee))
             }
         )
-        var tap: MTAudioProcessingTap?
+        var unmanagedTap: Unmanaged<MTAudioProcessingTap>?
         let status = MTAudioProcessingTapCreate(
-            kCFAllocatorDefault, &callbacks, kMTAudioProcessingTapCreationFlag_PreEffects, &tap
+            kCFAllocatorDefault, &callbacks, kMTAudioProcessingTapCreationFlag_PreEffects,
+            &unmanagedTap
         )
-        guard status == noErr, let tap else {
+        guard status == noErr, let tap = unmanagedTap?.takeRetainedValue() else {
             retained.release()
             return nil
         }
