@@ -132,6 +132,9 @@ jobs:
             -derivedDataPath DerivedData \
             CODE_SIGNING_ALLOWED=NO
 
+      - name: Run deterministic psychoacoustic package tests
+        run: swift test --package-path research/phase3/P3-R01B/SwiftPsychoacousticLab
+
       - name: Package and record provenance
         run: |
           set -euo pipefail
