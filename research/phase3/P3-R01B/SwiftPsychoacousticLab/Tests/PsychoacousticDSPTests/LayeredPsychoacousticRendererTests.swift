@@ -75,6 +75,19 @@ final class LayeredPsychoacousticRendererTests: XCTestCase {
         XCTAssertFalse(stream.isStopped)
     }
 
+    func testLayeredFrequencyAndGainRampsRemainContinuousAcrossChunks() {
+        var renderer = LayeredPsychoacousticRenderer(sampleRate: 48_000, mode: .binaural,
+            carrierHz: 200, beatHz: 10, toneGain: 0.4)
+        renderer.setFrequencies(carrierHz: 240, beatHz: 12, transitionFrames: 2_400)
+        renderer.setToneGain(0.2, fadeFrames: 2_400)
+        var first = StereoPCMBuffer(frameCount: 1_200)
+        var second = StereoPCMBuffer(frameCount: 1_200)
+        first.left.withUnsafeMutableBufferPointer { l in first.right.withUnsafeMutableBufferPointer { r in renderer.render(into: l, right: r) } }
+        second.left.withUnsafeMutableBufferPointer { l in second.right.withUnsafeMutableBufferPointer { r in renderer.render(into: l, right: r) } }
+        XCTAssertTrue((first.interleaved + second.interleaved).allSatisfy { $0.isFinite && abs($0) < 1 })
+        XCTAssertNotEqual(first.left.last, second.left.first)
+    }
+
     private func render(mode: PsychoacousticMode, frames: Int, gain: Double = 0.4) -> StereoPCMBuffer {
         var renderer = LayeredPsychoacousticRenderer(sampleRate: 48_000, mode: mode,
             carrierHz: 200, beatHz: 10, toneGain: gain)

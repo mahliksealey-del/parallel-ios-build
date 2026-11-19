@@ -107,9 +107,11 @@ public struct RealtimeControlledLayeredStream {
             switch command.kind {
             case UInt32(P3_CONTROL_FREQUENCIES):
                 renderer.setFrequencies(carrierHz: command.left_hz,
-                                        beatHz: command.right_hz - command.left_hz)
+                                        beatHz: command.right_hz - command.left_hz,
+                                        transitionFrames: Int(command.transition_frames))
             case UInt32(P3_CONTROL_GAIN):
-                renderer.setToneGain(command.gain)
+                renderer.setToneGain(command.gain,
+                                     fadeFrames: Int(command.transition_frames))
             case UInt32(P3_CONTROL_MODE):
                 let index = Int(command.gain)
                 if PsychoacousticMode.allCases.indices.contains(index) {

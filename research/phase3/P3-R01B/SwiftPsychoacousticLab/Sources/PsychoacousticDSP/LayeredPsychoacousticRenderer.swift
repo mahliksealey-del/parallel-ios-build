@@ -27,6 +27,11 @@ public struct LayeredPsychoacousticRenderer: Sendable {
     private var carrierHz: Double
     private var beatHz: Double
     private var toneGain: Double
+    private var carrierStep = 0.0
+    private var beatStep = 0.0
+    private var frequencyFramesRemaining = 0
+    private var toneGainStep = 0.0
+    private var toneGainFramesRemaining = 0
     private var noise: NoiseLevels
     private var leftPhase = 0.0
     private var rightPhase = 0.0
@@ -84,6 +89,15 @@ public struct LayeredPsychoacousticRenderer: Sendable {
             leftPhase = wrap(leftPhase + 2 * .pi * carrierHz / sampleRate)
             rightPhase = wrap(rightPhase + 2 * .pi * (carrierHz + beatHz) / sampleRate)
             modulationPhase = wrap(modulationPhase + 2 * .pi * beatHz / sampleRate)
+            if frequencyFramesRemaining > 0 {
+                carrierHz += carrierStep
+                beatHz += beatStep
+                frequencyFramesRemaining -= 1
+            }
+            if toneGainFramesRemaining > 0 {
+                toneGain += toneGainStep
+                toneGainFramesRemaining -= 1
+            }
         }
     }
 
@@ -91,15 +105,31 @@ public struct LayeredPsychoacousticRenderer: Sendable {
 
     public mutating func setNoiseLevels(_ next: NoiseLevels) { noise = next }
 
-    public mutating func setFrequencies(carrierHz: Double, beatHz: Double) {
+    public mutating func setFrequencies(carrierHz: Double, beatHz: Double,
+                                        transitionFrames: Int = 0) {
         precondition(carrierHz >= 20 && carrierHz + beatHz < sampleRate / 2 && beatHz > 0)
-        self.carrierHz = carrierHz
-        self.beatHz = beatHz
+        precondition(transitionFrames >= 0)
+        if transitionFrames == 0 {
+            self.carrierHz = carrierHz
+            self.beatHz = beatHz
+            frequencyFramesRemaining = 0
+        } else {
+            carrierStep = (carrierHz - self.carrierHz) / Double(transitionFrames)
+            beatStep = (beatHz - self.beatHz) / Double(transitionFrames)
+            frequencyFramesRemaining = transitionFrames
+        }
     }
 
-    public mutating func setToneGain(_ next: Double) {
+    public mutating func setToneGain(_ next: Double, fadeFrames: Int = 0) {
         precondition(next.isFinite && (0...1).contains(next))
-        toneGain = next
+        precondition(fadeFrames >= 0)
+        if fadeFrames == 0 {
+            toneGain = next
+            toneGainFramesRemaining = 0
+        } else {
+            toneGainStep = (next - toneGain) / Double(fadeFrames)
+            toneGainFramesRemaining = fadeFrames
+        }
     }
 
     private mutating func nextWhite() -> Double {
