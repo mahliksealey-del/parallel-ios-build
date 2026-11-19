@@ -77,6 +77,7 @@ final class MediaMixerViewModel: ObservableObject, AudioPlaybackSource {
     @Published private(set) var durationSeconds = 0.0
     @Published private(set) var currentSeconds = 0.0
     @Published var volume = 0.65
+    @Published var boostedAudio = false
 
     private weak var coordinator: AudioSessionCoordinator?
     let slot: Int
@@ -148,6 +149,28 @@ final class MediaMixerViewModel: ObservableObject, AudioPlaybackSource {
         player?.volume = Float(volume)
     }
 
+    func applyAudioBoost() async {
+        guard let item = player?.currentItem else { return }
+        if !boostedAudio {
+            item.audioMix = nil
+            return
+        }
+        do {
+            let tracks = try await item.asset.loadTracks(withMediaType: .audio)
+            guard let track = tracks.first,
+                  let mix = VideoAudioBoostFactory.makeAudioMix(for: track) else {
+                boostedAudio = false
+                reportError("Boost is unavailable for this video's audio format.")
+                return
+            }
+            item.audioMix = mix
+            errorMessage = nil
+        } catch {
+            boostedAudio = false
+            reportError("Could not enable video audio boost: \(error.localizedDescription)")
+        }
+    }
+
     func reportError(_ message: String) {
         errorMessage = message
         status = "Needs attention"
@@ -192,6 +215,7 @@ final class MediaMixerViewModel: ObservableObject, AudioPlaybackSource {
                 ? duration.seconds : 0
             status = "Ready to play"
             observe(item: nextItem, player: nextPlayer)
+            if boostedAudio { await applyAudioBoost() }
             if let oldFile { ManagedVideoFileStore.delete(oldFile) }
         } catch {
             if let copiedFile { ManagedVideoFileStore.delete(copiedFile) }

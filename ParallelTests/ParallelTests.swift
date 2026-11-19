@@ -644,6 +644,17 @@ final class ParallelTests: XCTestCase {
         XCTAssertTrue(coordinator.requestedSources.isEmpty)
     }
 
+    func testVideoBoostAppliesSixDecibelsAndLimitsPeaks() {
+        var samples: [Float] = [0, 0.1, -0.25, 0.6, -1]
+        VideoAudioBoostPolicy.process(&samples)
+        XCTAssertEqual(samples[0], 0, accuracy: 0.000001)
+        XCTAssertEqual(samples[1], 0.19952623, accuracy: 0.000001)
+        XCTAssertEqual(samples[2], -0.49881557, accuracy: 0.000001)
+        XCTAssertEqual(samples[3], 0.98, accuracy: 0.000001)
+        XCTAssertEqual(samples[4], -0.98, accuracy: 0.000001)
+        XCTAssertTrue(samples.allSatisfy { $0.isFinite && abs($0) <= 0.98 })
+    }
+
     private func makeFixture() -> (coordinator: AudioSessionCoordinator, session: FakeSession, graph: FakeGraph) {
         let session = FakeSession()
         let graph = FakeGraph()

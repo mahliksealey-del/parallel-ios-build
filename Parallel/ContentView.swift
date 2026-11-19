@@ -280,6 +280,15 @@ private struct MediaSlotCard: View {
                     .accessibilityLabel("Video \(media.slot + 1) volume")
                     .accessibilityIdentifier("media-volume-\(media.slot + 1)")
             }
+            Toggle("+6 dB video boost", isOn: $media.boostedAudio)
+                .font(.caption)
+                .onChange(of: media.boostedAudio) { _ in
+                    Task { @MainActor in await media.applyAudioBoost() }
+                }
+                .accessibilityIdentifier("media-boost-\(media.slot + 1)")
+            Text("Optional decoded-audio gain with a 0.98 digital peak limiter. Default is bypassed.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             Text(media.fileName)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
