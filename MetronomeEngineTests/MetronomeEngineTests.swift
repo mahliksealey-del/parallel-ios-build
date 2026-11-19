@@ -3,6 +3,20 @@ import XCTest
 
 @MainActor
 final class MetronomeEngineTests: XCTestCase {
+    func testClickBoostIsOptInAndRequiresStoppedRenderState() throws {
+        let engine = MetronomeEngine()
+        XCTAssertFalse(engine.boostedClicks)
+        XCTAssertNoThrow(try engine.setBoostedClicks(true))
+        XCTAssertTrue(engine.boostedClicks)
+        _ = try engine.makeNodes(sampleRate: 48_000)
+        engine.markPlaying()
+        XCTAssertThrowsError(try engine.setBoostedClicks(false))
+        XCTAssertTrue(engine.boostedClicks)
+        engine.stop()
+        XCTAssertNoThrow(try engine.setBoostedClicks(false))
+        XCTAssertFalse(engine.boostedClicks)
+    }
+
     func testGainBounds() throws {
         let engine = MetronomeEngine()
         XCTAssertNoThrow(try engine.setGain(0))

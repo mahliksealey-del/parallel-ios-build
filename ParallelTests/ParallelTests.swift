@@ -606,6 +606,28 @@ final class ParallelTests: XCTestCase {
         XCTAssertEqual(PsychoacousticViewModel.bandLabel(for: .nan), "Not classified")
     }
 
+    func testClickBoostRebuildDoesNotInterruptIndependentVideo() {
+        let fixture = makeFixture()
+        let video = FakeSource()
+        XCTAssertTrue(fixture.coordinator.register(video, for: .media(0)))
+        let engine = MetronomeEngine()
+        let model = MetronomeViewModel(engine: engine, coordinator: fixture.coordinator)
+
+        fixture.coordinator.requestPlayback(for: .media(0))
+        model.togglePlayback()
+        XCTAssertTrue(model.isPlaying)
+        model.boostedClicks = true
+        model.applyClickBoost()
+
+        XCTAssertTrue(engine.boostedClicks)
+        XCTAssertEqual(fixture.graph.stopCount, 1)
+        XCTAssertEqual(fixture.graph.startCount, 2)
+        XCTAssertEqual(fixture.session.activateCount, 1)
+        XCTAssertEqual(fixture.session.deactivateCount, 0)
+        XCTAssertEqual(video.stopCount, 0)
+        XCTAssertTrue(model.isPlaying)
+    }
+
     func testExtendedPsychoacousticGainIsBounded() {
         let engine = MetronomeEngine()
         let graph = AudioGraphCoordinator(metronome: engine)

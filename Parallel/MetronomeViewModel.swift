@@ -9,6 +9,7 @@ final class MetronomeViewModel: ObservableObject {
     @Published private(set) var routeDescription = "Audio route activates when playback starts."
     @Published var bpm = 120.0
     @Published var gain = 0.65
+    @Published var boostedClicks = false
     @Published private(set) var isPlaying = false
 
     private let engine: MetronomeEngineProtocol
@@ -79,6 +80,25 @@ final class MetronomeViewModel: ObservableObject {
         do { try engine.setGain(Float(gain)) } catch { errorMessage = error.localizedDescription }
     }
 
+    func applyClickBoost() {
+        do {
+            if coordinator.userRequestedPlayback && state == .active {
+                // Rebuild only the metronome's immutable render state.
+                // The three AVPlayers, psychoacoustic source and shared
+                // audio-session playback intent must remain untouched.
+                try coordinator.reconfigureMetronome {
+                    try self.engine.setBoostedClicks(self.boostedClicks)
+                }
+            } else {
+                try engine.setBoostedClicks(boostedClicks)
+            }
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        refreshMetronomeState()
+    }
+
     func retry() {
         errorMessage = nil
         applySettings()
@@ -87,5 +107,5 @@ final class MetronomeViewModel: ObservableObject {
         refreshMetronomeState()
     }
 
-    private func applySettings() { applyTempo(); applyGain() }
+    private func applySettings() { applyTempo(); applyGain(); applyClickBoost() }
 }

@@ -66,6 +66,15 @@ struct ContentView: View {
                 }
                 .onChange(of: model.gain) { _ in model.applyGain() }
 
+                Section("Metronome click strength") {
+                    Toggle("Stronger clicks (+4.3 dB)", isOn: $model.boostedClicks)
+                        .accessibilityIdentifier("metronome-click-boost")
+                    Text("Off by default. Increases generated click strength without raising iPhone system volume. Start low when using headphones.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .onChange(of: model.boostedClicks) { _ in model.applyClickBoost() }
+
                 Section("Metronome playback") {
                     Button(model.isPlaying ? "Stop Metronome" : "Start Metronome") {
                         model.togglePlayback()

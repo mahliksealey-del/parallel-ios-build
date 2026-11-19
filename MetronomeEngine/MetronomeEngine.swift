@@ -40,9 +40,11 @@ public protocol MetronomeEngineProtocol: AnyObject {
     var state: MetronomeEngineState { get }
     var bpm: Double { get }
     var gain: Float { get }
+    var boostedClicks: Bool { get }
     var onStateChange: ((MetronomeEngineState) -> Void)? { get set }
     func setBPM(_ bpm: Double) throws
     func setGain(_ gain: Float) throws
+    func setBoostedClicks(_ enabled: Bool) throws
     func makeNodes(sampleRate: Double) throws -> MetronomeAudioNodes
     func markPlaying()
     func markFailed(_ message: String)
@@ -58,6 +60,9 @@ public final class MetronomeEngine: MetronomeEngineProtocol {
     }
     public private(set) var bpm = 120.0
     public private(set) var gain: Float = 0.65
+    /// Opt-in stronger click, using immutable per-render-state amplitude.
+    /// Normal 0.55, boosted 0.90 (about +4.28 dB); below PCM full scale.
+    public private(set) var boostedClicks = false
     public var onStateChange: ((MetronomeEngineState) -> Void)?
     private var gainMixer: AVAudioMixerNode?
 
@@ -75,6 +80,11 @@ public final class MetronomeEngine: MetronomeEngineProtocol {
         gainMixer?.outputVolume = gain
     }
 
+    public func setBoostedClicks(_ enabled: Bool) throws {
+        guard state == .stopped || isFailure else { throw MetronomeEngineError.alreadyRunning }
+        boostedClicks = enabled
+    }
+
     public func makeNodes(sampleRate: Double) throws -> MetronomeAudioNodes {
         guard state != .playing && state != .starting else { throw MetronomeEngineError.alreadyRunning }
         guard sampleRate.isFinite, sampleRate > 0 else { throw MetronomeEngineError.invalidSampleRate }
@@ -84,7 +94,8 @@ public final class MetronomeEngine: MetronomeEngineProtocol {
         state = .starting
         let mixer = AVAudioMixerNode()
         mixer.outputVolume = gain
-        let renderState = RenderState(bpm: bpm, sampleRate: sampleRate)
+        let renderState = RenderState(bpm: bpm, sampleRate: sampleRate,
+                                      peakAmplitude: boostedClicks ? 0.90 : 0.55)
         let source = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
             renderState.render(frameCount: frameCount, audioBufferList: audioBufferList)
             return noErr
@@ -110,6 +121,7 @@ public final class MetronomeEngine: MetronomeEngineProtocol {
 private final class RenderState: @unchecked Sendable {
     private let sampleRate: Double
     private let framesPerBeat: Double
+    private let peakAmplitude: Double
     private var framePosition = 0.0
     private var nextBeatFrame = 0.0
     private var beatIndex = 0
@@ -117,9 +129,10 @@ private final class RenderState: @unchecked Sendable {
     private var clickLength = 0
     private var clickFrequency = 1_000.0
 
-    init(bpm: Double, sampleRate: Double) {
+    init(bpm: Double, sampleRate: Double, peakAmplitude: Double) {
         self.sampleRate = sampleRate
         self.framesPerBeat = sampleRate * 60.0 / bpm
+        self.peakAmplitude = peakAmplitude
     }
 
     func render(frameCount: AVAudioFrameCount, audioBufferList: UnsafeMutablePointer<AudioBufferList>) {
@@ -138,7 +151,7 @@ private final class RenderState: @unchecked Sendable {
                 let elapsed = clickLength - clickRemaining
                 let phase = 2.0 * Double.pi * clickFrequency * Double(elapsed) / sampleRate
                 let envelope = Double(clickRemaining) / Double(clickLength)
-                sample = Float(sin(phase) * envelope * envelope * 0.55)
+                sample = Float(sin(phase) * envelope * envelope * peakAmplitude)
                 clickRemaining -= 1
             }
             for buffer in buffers {
