@@ -7,9 +7,24 @@ import Foundation
 final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
     @Published var carrierHz: Double = 200
     @Published var beatHz: Double = 10
-    @Published var gain: Double = 0.15
+    @Published var gain: Double = PsychoacousticGainPolicy.defaultLevel
     @Published private(set) var isPlaying = false
     @Published private(set) var errorMessage: String?
+
+    /// A conventional EEG frequency-band *label* for the stimulus difference,
+    /// not a claim that the listener's EEG follows this frequency.
+    static func bandLabel(for beatHz: Double) -> String {
+        guard beatHz.isFinite, beatHz > 0 else { return "Not classified" }
+        switch beatHz {
+        case ..<4: return "Delta-range"
+        case ..<8: return "Theta-range"
+        case ..<13: return "Alpha-range"
+        case ..<30: return "Beta-range"
+        default: return "Gamma-range"
+        }
+    }
+
+    var bandLabel: String { Self.bandLabel(for: beatHz) }
 
     private weak var session: AudioSessionCoordinator?
     private let graph: AudioGraphCoordinator
@@ -100,6 +115,6 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
     private var parametersAreValid: Bool {
         carrierHz.isFinite && (100...800).contains(carrierHz)
         && beatHz.isFinite && (1...40).contains(beatHz)
-        && gain.isFinite && (0...0.25).contains(gain)
+        && gain.isFinite && (0...PsychoacousticGainPolicy.maximum).contains(gain)
     }
 }

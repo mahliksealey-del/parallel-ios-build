@@ -2,6 +2,14 @@ import AVFoundation
 import Foundation
 import PsychoacousticDSP
 
+/// Conservative per-channel digital headroom for the first gain experiment.
+/// A 0.50 peak is -6.02 dBFS per synthesized sine before other audio mixes.
+/// This is not an acoustic loudness or hearing-safety guarantee.
+enum PsychoacousticGainPolicy {
+    static let maximum: Double = 0.50
+    static let defaultLevel: Double = 0.15
+}
+
 /// Locks are used only on control/notification threads, never by the renderer.
 /// Retains the control owner while a route notification disarms it.
 final class PsychoacousticEmergencyRelay: @unchecked Sendable {
@@ -38,7 +46,7 @@ enum PsychoacousticAudioError: LocalizedError {
         case .memoryAllocation:
             return "Could not allocate psychoacoustic audio controls."
         case .invalidParameters:
-            return "Choose a carrier from 100–800 Hz, beat difference from 1–40 Hz, and volume from 0–25%."
+            return "Choose a carrier from 100–800 Hz, beat difference from 1–40 Hz, and PCM gain from 0–50%."
         case .controlQueueFull:
             return "Audio controls are temporarily busy. Release the slider and try again."
         case .startFailed(let detail):
@@ -129,7 +137,7 @@ struct PsychoacousticAudioNodes {
         guard leftHz.isFinite, rightHz.isFinite,
               leftHz >= 100, rightHz <= 840, rightHz > leftHz,
               rightHz < sampleRate / 2, targetGain.isFinite,
-              (0...0.25).contains(targetGain) else {
+              (0...PsychoacousticGainPolicy.maximum).contains(targetGain) else {
             throw PsychoacousticAudioError.invalidParameters
         }
 

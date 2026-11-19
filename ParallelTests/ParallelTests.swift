@@ -597,6 +597,31 @@ final class ParallelTests: XCTestCase {
         XCTAssertEqual(f.coordinator.state, .active)
     }
 
+    func testPsychoacousticBeatBandLabels() {
+        XCTAssertEqual(PsychoacousticViewModel.bandLabel(for: 2), "Delta-range")
+        XCTAssertEqual(PsychoacousticViewModel.bandLabel(for: 6), "Theta-range")
+        XCTAssertEqual(PsychoacousticViewModel.bandLabel(for: 10), "Alpha-range")
+        XCTAssertEqual(PsychoacousticViewModel.bandLabel(for: 20), "Beta-range")
+        XCTAssertEqual(PsychoacousticViewModel.bandLabel(for: 40), "Gamma-range")
+        XCTAssertEqual(PsychoacousticViewModel.bandLabel(for: .nan), "Not classified")
+    }
+
+    func testExtendedPsychoacousticGainIsBounded() {
+        let engine = MetronomeEngine()
+        let graph = AudioGraphCoordinator(metronome: engine)
+        let coordinator = AudioSessionCoordinator(graph: graph, observeSystemNotifications: false)
+        let psycho = PsychoacousticViewModel(graph: graph, coordinator: coordinator)
+        XCTAssertEqual(psycho.gain, 0.15, accuracy: 0.00001)
+        XCTAssertEqual(PsychoacousticGainPolicy.maximum, 0.50)
+        psycho.gain = 0.50
+        psycho.applyGain()
+        XCTAssertNil(psycho.errorMessage)
+        psycho.gain = 0.5001
+        psycho.applyGain()
+        XCTAssertNotNil(psycho.errorMessage)
+        XCTAssertTrue(coordinator.requestedSources.isEmpty)
+    }
+
     private func makeFixture() -> (coordinator: AudioSessionCoordinator, session: FakeSession, graph: FakeGraph) {
         let session = FakeSession()
         let graph = FakeGraph()

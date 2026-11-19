@@ -107,12 +107,17 @@ struct ContentView: View {
                     .onChange(of: psychoacoustic.beatHz) { _ in
                         if !isDraggingBeat { psychoacoustic.applyFrequencies() }
                     }
+                    LabeledContent("EEG band analogy",
+                                   value: psychoacoustic.bandLabel)
+                    Text("This labels the sound's frequency difference, not your measured brainwaves.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     LabeledContent("Right carrier",
                                    value: "\(Int(psychoacoustic.carrierHz + psychoacoustic.beatHz)) Hz")
 
                     LabeledContent("Psychoacoustic level",
                                    value: "\(Int(psychoacoustic.gain * 100))%")
-                    Slider(value: $psychoacoustic.gain, in: 0...0.25,
+                    Slider(value: $psychoacoustic.gain, in: 0...PsychoacousticGainPolicy.maximum,
                            onEditingChanged: { editing in
                         isDraggingPsychoGain = editing
                         if !editing { psychoacoustic.applyGain() }
@@ -121,6 +126,9 @@ struct ContentView: View {
                     .onChange(of: psychoacoustic.gain) { _ in
                         if !isDraggingPsychoGain { psychoacoustic.applyGain() }
                     }
+                    Text("Extended PCM gain: 50% maximum, up from 25%. Start low; this does not adjust TikTok or Instagram volume.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                     Button(psychoacoustic.isPlaying
                            ? "Stop Psychoacoustic Audio"
                            : "Start Psychoacoustic Audio") {
