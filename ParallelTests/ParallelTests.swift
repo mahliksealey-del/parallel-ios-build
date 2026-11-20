@@ -661,15 +661,35 @@ final class ParallelTests: XCTestCase {
         XCTAssertTrue(coordinator.requestedSources.isEmpty)
     }
 
-    func testVideoBoostAppliesSixDecibelsAndLimitsPeaks() {
-        var samples: [Float] = [0, 0.1, -0.25, 0.6, -1]
-        VideoAudioBoostPolicy.process(&samples)
-        XCTAssertEqual(samples[0], 0, accuracy: 0.000001)
-        XCTAssertEqual(samples[1], 0.19952623, accuracy: 0.000001)
-        XCTAssertEqual(samples[2], -0.49881557, accuracy: 0.000001)
-        XCTAssertEqual(samples[3], 0.98, accuracy: 0.000001)
-        XCTAssertEqual(samples[4], -0.98, accuracy: 0.000001)
-        XCTAssertTrue(samples.allSatisfy { $0.isFinite && abs($0) <= 0.98 })
+    func testVideoBoostAppliesMakeupToQuietAudioAndBoundsPeaks() {
+        var quiet = Array(repeating: Float(0.1), count: 4_800)
+        VideoAudioBoostPolicy.process(&quiet)
+        XCTAssertEqual(quiet.last!, 0.19952623, accuracy: 0.003)
+        var loud = Array(repeating: Float(0.8), count: 4_800)
+        VideoAudioBoostPolicy.process(&loud)
+        XCTAssertTrue(loud.allSatisfy { $0.isFinite && abs($0) <= VideoAudioBoostPolicy.ceiling })
+        XCTAssertLessThan(loud.last!, 0.8) // sustained peaks compress
+        XCTAssertGreaterThan(loud.last!, 0.25) // not muted by dynamics
+    }
+
+    func testVideoDynamicsLinksStereoAndRecoversAfterLoudSignal() {
+        var dynamics = VideoAudioDynamics(sampleRate: 48_000)
+        var left = Float.zero
+        var right = Float.zero
+        for _ in 0..<4_800 {
+            let sameGain = dynamics.outputGain(forInputPeak: 0.8, makeup: 1.9952623)
+            left = 0.8 * sameGain
+            right = -0.4 * sameGain
+            XCTAssertLessThanOrEqual(abs(left), VideoAudioBoostPolicy.ceiling)
+            XCTAssertEqual(right / left, -0.5, accuracy: 0.0001)
+        }
+        let compressed = abs(left)
+        var recovered: Float = 0
+        for _ in 0..<48_000 {
+            recovered = 0.1 * dynamics.outputGain(forInputPeak: 0.1, makeup: 1.9952623)
+        }
+        XCTAssertGreaterThan(recovered, 0.18)
+        XCTAssertLessThan(compressed, VideoAudioBoostPolicy.ceiling)
     }
 
     private func makeFixture() -> (coordinator: AudioSessionCoordinator, session: FakeSession, graph: FakeGraph) {
