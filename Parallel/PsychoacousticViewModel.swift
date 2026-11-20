@@ -181,6 +181,9 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
     func applyPreset(_ preset: Preset) {
         selectedProgram = nil
         programCurrentBeatHz = nil
+        whiteNoise = 0
+        pinkNoise = 0
+        brownNoise = 0
         switch preset {
         case .focus: carrierHz = 220; beatHz = 14; mode = .binaural; pinkNoise = 0.04
         case .calm: carrierHz = 180; beatHz = 8; mode = .monaural; pinkNoise = 0.08
@@ -1001,14 +1004,16 @@ struct PsychoacousticSoundSettings: Codable {
     let stages: [PsychoacousticProgramStage]
 
     var isValid: Bool {
+        // Keep the closure outside guard's comma-separated condition list.
+        let noiseValid = [whiteNoise, pinkNoise, brownNoise].allSatisfy {
+            $0.isFinite && (0...0.2).contains($0)
+        }
         guard carrierHz.isFinite, (100...800).contains(carrierHz),
               beatHz.isFinite, (1...40).contains(beatHz),
               carrierHz + beatHz <= 840,
               gain.isFinite, (0...PsychoacousticGainPolicy.maximum).contains(gain),
               PsychoacousticMode(rawValue: modeRaw) != nil,
-              [whiteNoise, pinkNoise, brownNoise].allSatisfy {
-                  $0.isFinite && (0...0.2).contains($0)
-              },
+              noiseValid,
               sessionMinutes >= 0 && sessionMinutes < Int.max / 60,
               customSessionSeconds.map({ $0 >= 10 }) ?? true,
               [5, 10, 20, 30].contains(fadeDurationSeconds),

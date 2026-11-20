@@ -495,6 +495,7 @@ private struct PsychoacousticProgramEditor: View {
                 } label: {
                     Label("Add another stage", systemImage: "plus.circle")
                 }
+                .buttonStyle(.bordered)
                 .disabled(psychoacoustic.isPlaying)
                 .accessibilityIdentifier("listening-stage-add")
                 HStack {
@@ -504,6 +505,7 @@ private struct PsychoacousticProgramEditor: View {
                         psychoacoustic.saveCustomSequence(name: sequenceName)
                         if psychoacoustic.errorMessage == nil { sequenceName = "" }
                     }
+                    .buttonStyle(.bordered)
                     .disabled(psychoacoustic.isPlaying || sequenceName.trimmingCharacters(
                         in: .whitespacesAndNewlines).isEmpty)
                 }
@@ -519,6 +521,7 @@ private struct PsychoacousticProgramEditor: View {
                             Button(saved.name) {
                                 psychoacoustic.loadCustomSequence(id: saved.id)
                             }
+                            .buttonStyle(.bordered)
                             .disabled(psychoacoustic.isPlaying)
                             Spacer()
                             Button(role: .destructive) {
@@ -526,6 +529,7 @@ private struct PsychoacousticProgramEditor: View {
                             } label: {
                                 Image(systemName: "trash")
                             }
+                            .buttonStyle(.bordered)
                             .disabled(psychoacoustic.isPlaying)
                             .accessibilityLabel("Delete \(saved.name)")
                         }
@@ -798,7 +802,7 @@ private struct PsychoacousticSoundPresetEditor: View {
                     Text(preset.settings.selectedProgramRaw == "threeStageArc"
                         ? "Custom staged psychoacoustic session"
                         : preset.settings.selectedProgramRaw != nil
-                          ? "Reference listening program"
+                          ? "Fixed acoustic comparison"
                           : "Manually configured psychoacoustics")
                         .font(.caption)
                         .foregroundStyle(.secondary)
