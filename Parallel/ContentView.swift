@@ -12,6 +12,7 @@ struct ContentView: View {
     @ObservedObject var pip: VideoPiPCoordinator
     @ObservedObject var psychoacoustic: PsychoacousticViewModel
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var openURL
     @State private var isDraggingTempo = false
     @State private var isDraggingCarrier = false
     @State private var isDraggingBeat = false
@@ -231,6 +232,24 @@ struct ContentView: View {
 
                 Section("Experimental listening programs") {
                     PsychoacousticProgramEditor(psychoacoustic: psychoacoustic)
+                }
+                Section("My psychoacoustic presets") {
+                    PsychoacousticSoundPresetEditor(psychoacoustic: psychoacoustic)
+                }
+                Section("Scientific evidence") {
+                    Button {
+                        if let destination = URL(string:
+                            "https://doi.org/10.1371/journal.pone.0286023") {
+                            openURL(destination)
+                        }
+                    } label: {
+                        Label("Review binaural-beat evidence", systemImage: "book.closed")
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("psycho-evidence-review-only")
+                    Text("Only this button opens the paper. Selecting programs, editing stages or removing them never opens a website.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Procedural noise layers") {
@@ -455,12 +474,14 @@ private struct PsychoacousticProgramEditor: View {
                     }
                 }
                 .disabled(psychoacoustic.isPlaying)
+                .buttonStyle(.bordered)
                 .accessibilityIdentifier("listening-program-\(program.rawValue)")
             }
             if psychoacoustic.selectedProgram != nil {
                 Button("Clear program · manual sound") {
                     psychoacoustic.chooseExperimentalProgram(nil)
                 }
+                .buttonStyle(.bordered)
                 .disabled(psychoacoustic.isPlaying)
             }
             if psychoacoustic.selectedProgram == .threeStageArc {
@@ -553,10 +574,12 @@ private struct PsychoacousticProgramEditor: View {
             if let difference = psychoacoustic.programCurrentBeatHz {
                 LabeledContent("Current binaural difference",
                     value: String(format: "%.2f Hz", difference))
+                LabeledContent("Current stimulus band", value:
+                    PsychoacousticViewModel.bandLabel(for: difference))
             }
-            Link("Review binaural-beat evidence",
-                destination: URL(string: "https://doi.org/10.1371/journal.pone.0286023")!)
+            Text("These are acoustic listening parameters, not measured EEG states.")
                 .font(.footnote)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -613,6 +636,25 @@ private struct PsychoacousticStageEditor: View {
                     }
                     .pickerStyle(.menu)
                     .disabled(psychoacoustic.isPlaying)
+                    if stage.tuning == .customA4Reference {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Reference pitch · A4 (Hz)")
+                                .font(.subheadline)
+                            TextField("Custom A4 reference Hz",
+                                value: Binding<Double>(
+                                    get: { stage.referenceA4Hz },
+                                    set: { psychoacoustic.updateProgramStage(
+                                        id: stageID, referenceA4Hz: $0) }),
+                                format: .number.precision(.fractionLength(0...2)))
+                                .keyboardType(.decimalPad)
+                                .textFieldStyle(.roundedBorder)
+                                .disabled(psychoacoustic.isPlaying)
+                                .accessibilityIdentifier("stage-a4-reference-\(index)")
+                            Text("The entire twelve-note equal-temperament scale follows this A4 setting. E.g., A4 = 432 Hz makes B4 ≈ 484.9 Hz.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                     if stage.tuning == .manualHz {
                         TextField("Left carrier (Hz)",
                             value: Binding<Double>(
@@ -630,18 +672,26 @@ private struct PsychoacousticStageEditor: View {
                         )) {
                             ForEach(0..<12, id: \.self) { pitchClass in
                                 Text(CarrierPitchTuning.noteNames[pitchClass]).tag(pitchClass)
+                                    .disabled(!stage.supports(note: pitchClass, octave: stage.octave))
                             }
                         }
+                        .pickerStyle(.menu)
                         .disabled(psychoacoustic.isPlaying)
                         Picker("Octave", selection: Binding<Int>(
                             get: { stage.octave },
                             set: { psychoacoustic.updateProgramStage(id: stageID, octave: $0) }
                         )) {
-                            ForEach(2...5, id: \.self) { octave in
-                                Text("\(octave)").tag(octave)
+                            ForEach(0...5, id: \.self) { octave in
+                                Text("Octave \(octave)")
+                                    .tag(octave)
+                                    .disabled(!stage.supports(note: stage.noteClass, octave: octave))
                             }
                         }
+                        .pickerStyle(.menu)
                         .disabled(psychoacoustic.isPlaying)
+                        Text("C0–C5 are listed; out-of-range notes (including C0/C1) are disabled. This renderer only supports audible 100–800 Hz carriers.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     TextField("Binaural difference (Hz)",
                         value: Binding<Double>(
@@ -656,23 +706,101 @@ private struct PsychoacousticStageEditor: View {
                         value: String(format: "%.2f Hz", stage.carrierHz))
                     LabeledContent("Right ear",
                         value: String(format: "%.2f Hz", stage.carrierHz + stage.beatHz))
+                    LabeledContent("Stimulus band", value:
+                        PsychoacousticViewModel.bandLabel(for: stage.beatHz))
+                    Text("Delta / Theta / Alpha / Beta / Gamma describe the frequency difference, not your actual EEG state.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Text("Quartal tuning — coming soon")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Button("Remove stage", role: .destructive) {
                         psychoacoustic.removeProgramStage(id: stageID)
                     }
+                    .buttonStyle(.bordered)
                     .disabled(psychoacoustic.isPlaying || psychoacoustic.editableStages.count <= 1)
+                    .accessibilityIdentifier("listening-stage-remove-\(index)")
                 }
                 .padding(.vertical, 6)
             } label: {
                 VStack(alignment: .leading) {
-                    Text("Stage \(index + 1)")
-                        .font(.subheadline.bold())
+                    HStack {
+                        Text("Stage \(index + 1)")
+                            .font(.subheadline.bold())
+                        Spacer()
+                        Text(PsychoacousticViewModel.bandLabel(for: stage.beatHz))
+                            .font(.caption.bold())
+                    }
                     Text(String(format: "%.1f Hz beat · %.2f Hz carrier · %d:%02d",
                         stage.beatHz, stage.carrierHz,
                         stage.durationSeconds / 60, stage.durationSeconds % 60))
                         .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}
+
+/// Saved snapshots of this audio engine only. Loading a snapshot never
+/// changes the metronome, any AVPlayer, or immediately starts playback.
+private struct PsychoacousticSoundPresetEditor: View {
+    @ObservedObject var psychoacoustic: PsychoacousticViewModel
+    @State private var name = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Save the current tone or sequence, carrier tuning, binaural difference, noise, level, mode, timer and fade. Presets restore at app launch without autoplay.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                TextField("Name psycho preset", text: $name)
+                    .textFieldStyle(.roundedBorder)
+                Button("Save") {
+                    psychoacoustic.saveSoundPreset(name: name)
+                    if psychoacoustic.errorMessage == nil { name = "" }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(psychoacoustic.isPlaying ||
+                    name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityIdentifier("psycho-preset-save")
+            }
+            ForEach(psychoacoustic.soundPresets) { preset in
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Button {
+                            psychoacoustic.loadSoundPreset(id: preset.id)
+                        } label: {
+                            HStack {
+                                Text(preset.name)
+                                if psychoacoustic.selectedSoundPresetID == preset.id {
+                                    Image(systemName: "checkmark.circle.fill")
+                                }
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(psychoacoustic.isPlaying)
+                        Spacer()
+                        Button("Update") {
+                            psychoacoustic.updateSoundPreset(id: preset.id)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(psychoacoustic.isPlaying)
+                        Button(role: .destructive) {
+                            psychoacoustic.deleteSoundPreset(id: preset.id)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(psychoacoustic.isPlaying)
+                        .accessibilityLabel("Delete psycho preset \(preset.name)")
+                    }
+                    Text(preset.settings.selectedProgramRaw == "threeStageArc"
+                        ? "Custom staged psychoacoustic session"
+                        : preset.settings.selectedProgramRaw != nil
+                          ? "Reference listening program"
+                          : "Manually configured psychoacoustics")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }

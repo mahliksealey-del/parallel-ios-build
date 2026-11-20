@@ -25,6 +25,8 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
     ]
     @Published private(set) var customSessionSeconds: Int?
     @Published private(set) var savedSequences: [SavedPsychoacousticSequence] = []
+    @Published private(set) var soundPresets: [PsychoacousticSoundPreset] = []
+    @Published private(set) var selectedSoundPresetID: UUID?
     @Published private(set) var isPlaying = false
     @Published private(set) var remainingSeconds: TimeInterval?
     @Published private(set) var fadeRemainingSeconds: TimeInterval?
@@ -87,6 +89,20 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
         if [5, 10, 20, 30].contains(savedFade) {
             fadeDurationSeconds = savedFade
         }
+        if let data = defaults.data(forKey: "psycho.soundPresets.v1"),
+           let decoded = try? JSONDecoder().decode([PsychoacousticSoundPreset].self, from: data) {
+            soundPresets = decoded.filter { $0.settings.isValid && !$0.name.isEmpty }
+        }
+        if let data = defaults.data(forKey: "psycho.workingSettings.v1"),
+           let settings = try? JSONDecoder().decode(PsychoacousticSoundSettings.self, from: data),
+           settings.isValid {
+            restoreSoundSettings(settings)
+        }
+        if let id = defaults.string(forKey: "psycho.selectedSoundPreset.v1")
+            .flatMap(UUID.init(uuidString:)),
+           soundPresets.contains(where: { $0.id == id }) {
+            selectedSoundPresetID = id
+        }
         precondition(coordinator.register(self, for: sourceID),
                      "Psychoacoustic source was already registered.")
     }
@@ -112,7 +128,11 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
             errorMessage = PsychoacousticAudioError.invalidParameters.localizedDescription
             return
         }
-        guard isPlaying else { return }
+        guard isPlaying else {
+            errorMessage = nil
+            persist()
+            return
+        }
         if graph.updatePsychoacousticFrequencies(
             left: carrierHz, right: carrierHz + beatHz
         ) {
@@ -128,7 +148,11 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
             errorMessage = PsychoacousticAudioError.invalidParameters.localizedDescription
             return
         }
-        guard isPlaying else { return }
+        guard isPlaying else {
+            errorMessage = nil
+            persist()
+            return
+        }
         if graph.updatePsychoacousticGain(gain) {
             errorMessage = nil
             persist()
@@ -182,6 +206,7 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
         guard selectedProgram == nil else { return }
         customSessionSeconds = nil
         UserDefaults.standard.removeObject(forKey: "psycho.customDuration.v2")
+        persistWorkingSettings()
         if isPlaying { scheduleStopIfNeeded() }
     }
 
@@ -191,6 +216,7 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
             return
         }
         UserDefaults.standard.set(fadeDurationSeconds, forKey: "psycho.fadeDuration")
+        persistWorkingSettings()
     }
 
     /// This overload preserves the original UI while the editor is migrated.
@@ -205,7 +231,8 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
     func updateProgramStage(
         id: UUID, durationSeconds: Int? = nil, beatHz: Double? = nil,
         carrierHz: Double? = nil, tuning: CarrierPitchTuning? = nil,
-        noteClass: Int? = nil, octave: Int? = nil
+        noteClass: Int? = nil, octave: Int? = nil,
+        referenceA4Hz: Double? = nil
     ) {
         guard !isPlaying, let index = editableStages.firstIndex(where: { $0.id == id }) else {
             errorMessage = "Stop psychoacoustic audio to edit a stage."
@@ -217,16 +244,18 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
         if let tuning { updated[index].tuning = tuning }
         if let noteClass { updated[index].noteClass = noteClass }
         if let octave { updated[index].octave = octave }
+        if let referenceA4Hz { updated[index].referenceA4Hz = referenceA4Hz }
         if let carrierHz {
             updated[index].carrierHz = carrierHz
             updated[index].tuning = .manualHz
         } else if updated[index].tuning != .manualHz,
                   let pitch = updated[index].tuning.frequency(
-                    noteClass: updated[index].noteClass, octave: updated[index].octave) {
+                    noteClass: updated[index].noteClass, octave: updated[index].octave,
+                    referenceA4Hz: updated[index].referenceA4Hz) {
             updated[index].carrierHz = pitch
         }
         guard PsychoacousticStageTimeline(stages: updated).isValid else {
-            errorMessage = "Stage invalid: use a 100–800 Hz carrier, a 1–40 Hz stereo difference and at least 10 seconds. Try another note/octave."
+            errorMessage = "Outside the audio range: carrier 100–800 Hz, binaural difference 1–40 Hz, A4 reference 200–800 Hz and at least 10 seconds. C0/C1 are not playable in this engine."
             return
         }
         editableStages = updated
@@ -293,6 +322,7 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
             customSessionSeconds = seconds
             UserDefaults.standard.set(seconds, forKey: "psycho.customDuration.v2")
         }
+        persistWorkingSettings()
         errorMessage = nil
     }
 
@@ -382,6 +412,126 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
         if let data = try? JSONEncoder().encode(editableStages) {
             UserDefaults.standard.set(data, forKey: "psycho.stages.v2")
         }
+        persistWorkingSettings()
+    }
+
+    /// A psychoacoustic preset stores only the generated engine's parameters:
+    /// never video files/AVPlayer levels or metronome settings.
+    private var currentSoundSettings: PsychoacousticSoundSettings {
+        PsychoacousticSoundSettings(
+            carrierHz: carrierHz, beatHz: beatHz, gain: gain, modeRaw: mode.rawValue,
+            whiteNoise: whiteNoise, pinkNoise: pinkNoise, brownNoise: brownNoise,
+            sessionMinutes: sessionMinutes, customSessionSeconds: customSessionSeconds,
+            fadeDurationSeconds: fadeDurationSeconds,
+            selectedProgramRaw: selectedProgram?.rawValue, stages: editableStages
+        )
+    }
+
+    func saveSoundPreset(name: String) {
+        guard !isPlaying else {
+            errorMessage = "Stop psychoacoustic playback before saving a preset."
+            return
+        }
+        let trimmed = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
+        let settings = currentSoundSettings
+        guard !trimmed.isEmpty, settings.isValid else {
+            errorMessage = "Name your psychoacoustic preset and check its sound parameters."
+            return
+        }
+        let record = PsychoacousticSoundPreset(id: UUID(), name: trimmed, settings: settings)
+        soundPresets.append(record)
+        selectedSoundPresetID = record.id
+        persistSoundPresetLibrary()
+        persistWorkingSettings()
+        errorMessage = nil
+    }
+
+    func loadSoundPreset(id: UUID) {
+        guard !isPlaying else {
+            errorMessage = "Stop psychoacoustic playback before loading a preset."
+            return
+        }
+        guard let preset = soundPresets.first(where: { $0.id == id }),
+              preset.settings.isValid else {
+            errorMessage = "This preset is invalid or was deleted."
+            return
+        }
+        restoreSoundSettings(preset.settings)
+        selectedSoundPresetID = id
+        persistSoundPresetLibrary()
+        persistWorkingSettings()
+        errorMessage = nil
+    }
+
+    func updateSoundPreset(id: UUID) {
+        guard !isPlaying,
+              let index = soundPresets.firstIndex(where: { $0.id == id }),
+              currentSoundSettings.isValid else {
+            errorMessage = "Stop audio and select a valid preset to update."
+            return
+        }
+        soundPresets[index] = PsychoacousticSoundPreset(
+            id: id, name: soundPresets[index].name, settings: currentSoundSettings)
+        selectedSoundPresetID = id
+        persistSoundPresetLibrary()
+        persistWorkingSettings()
+        errorMessage = nil
+    }
+
+    func deleteSoundPreset(id: UUID) {
+        guard !isPlaying else { return }
+        soundPresets.removeAll { $0.id == id }
+        if selectedSoundPresetID == id { selectedSoundPresetID = nil }
+        persistSoundPresetLibrary()
+    }
+
+    private func restoreSoundSettings(_ settings: PsychoacousticSoundSettings) {
+        guard settings.isValid, let restoredMode = PsychoacousticMode(rawValue: settings.modeRaw)
+        else { return }
+        carrierHz = settings.carrierHz
+        beatHz = settings.beatHz
+        gain = settings.gain
+        mode = restoredMode
+        whiteNoise = settings.whiteNoise
+        pinkNoise = settings.pinkNoise
+        brownNoise = settings.brownNoise
+        sessionMinutes = settings.sessionMinutes
+        customSessionSeconds = settings.customSessionSeconds
+        fadeDurationSeconds = settings.fadeDurationSeconds
+        editableStages = settings.stages
+        selectedProgram = settings.selectedProgramRaw.flatMap(ExperimentalListeningProgram.init(rawValue:))
+        // Study-reference choices are always restored to their exact original
+        // frequencies, even if a corrupt saved setting supplied other values.
+        if let program = selectedProgram, program != .threeStageArc {
+            carrierHz = program.initialLeftHz
+            beatHz = program.initialBeatHz
+            mode = .binaural
+            sessionMinutes = 5
+            customSessionSeconds = nil
+        } else if selectedProgram == .threeStageArc {
+            syncFirstStageIfSelected()
+            mode = .binaural
+            customSessionSeconds = nil
+        }
+        programCurrentBeatHz = nil
+    }
+
+    private func persistSoundPresetLibrary() {
+        let defaults = UserDefaults.standard
+        if let data = try? JSONEncoder().encode(soundPresets) {
+            defaults.set(data, forKey: "psycho.soundPresets.v1")
+        }
+        if let id = selectedSoundPresetID {
+            defaults.set(id.uuidString, forKey: "psycho.selectedSoundPreset.v1")
+        } else {
+            defaults.removeObject(forKey: "psycho.selectedSoundPreset.v1")
+        }
+    }
+
+    private func persistWorkingSettings() {
+        let current = currentSoundSettings
+        guard current.isValid, let data = try? JSONEncoder().encode(current) else { return }
+        UserDefaults.standard.set(data, forKey: "psycho.workingSettings.v1")
     }
 
     /// Controls the composite stereo-generated bus, preserving the internal
@@ -537,6 +687,7 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
         defaults.set(whiteNoise, forKey: "psycho.white")
         defaults.set(pinkNoise, forKey: "psycho.pink")
         defaults.set(brownNoise, forKey: "psycho.brown")
+        persistWorkingSettings()
     }
 }
 
@@ -627,22 +778,23 @@ enum ExperimentalListeningProgram: String, CaseIterable {
 }
 
 
-/// A completely local sequence definition. Each stage holds its stimulus
-/// difference until its final transition window, glides to the next stage
-/// without phase reset, and never reaches into video or external-app output.
-/// Pitch choices concern the audible carrier, not the binaural difference.
-/// A4=440Hz is 12-TET; natural below is *one explicit* C-based 5-limit
-/// just-intonation table with A4=440 (C4=264Hz), not a universal tuning.
+/// A binaural beat is the left/right difference, independent of the
+/// equal-temperament reference for the *audible carrier* notes.
+/// 432 Hz means A4=432 Hz, not a distinct "natural" temperament.
+/// Legacy five-limit data is migrated to A432 on decode, without keeping a
+/// misleading "natural" tuning option in the app.
 enum CarrierPitchTuning: String, CaseIterable, Codable {
     case manualHz
     case equalA440
-    case naturalFiveLimitC
+    case equalA432
+    case customA4Reference
 
     var label: String {
         switch self {
-        case .manualHz: return "Custom Hz"
-        case .equalA440: return "Notes · A4 = 440 Hz (12-TET)"
-        case .naturalFiveLimitC: return "Notes · natural 5-limit (C root)"
+        case .manualHz: return "Direct carrier Hz"
+        case .equalA440: return "12-TET · A4 = 440 Hz"
+        case .equalA432: return "12-TET · A4 = 432 Hz"
+        case .customA4Reference: return "12-TET · Custom A4 reference"
         }
     }
 
@@ -650,26 +802,36 @@ enum CarrierPitchTuning: String, CaseIterable, Codable {
         "C / B♯", "C♯ / D♭", "D", "D♯ / E♭", "E / F♭", "F / E♯",
         "F♯ / G♭", "G", "G♯ / A♭", "A", "A♯ / B♭", "B / C♭"
     ]
-    private static let justRatios: [Double] = [
-        1, 16.0/15, 9.0/8, 6.0/5, 5.0/4, 4.0/3,
-        45.0/32, 3.0/2, 8.0/5, 5.0/3, 9.0/5, 15.0/8
-    ]
 
-    func frequency(noteClass: Int, octave: Int) -> Double? {
-        guard (0..<12).contains(noteClass), (0...8).contains(octave) else { return nil }
+    /// Fixed twelve-tone equal temperament, shifted by the selected A4
+    /// reference; e.g. B4 at A432 = 432 × 2^(2/12) ≈ 484.99 Hz.
+    func frequency(noteClass: Int, octave: Int,
+                   referenceA4Hz: Double = 440) -> Double? {
+        guard (0..<12).contains(noteClass), (0...5).contains(octave) else { return nil }
+        let reference: Double
         switch self {
         case .manualHz: return nil
-        case .equalA440:
-            let semitones = 12 * (octave - 4) + noteClass - 9
-            return 440 * pow(2, Double(semitones) / 12)
-        case .naturalFiveLimitC:
-            return 264 * Self.justRatios[noteClass] * pow(2, Double(octave - 4))
+        case .equalA440: reference = 440
+        case .equalA432: reference = 432
+        case .customA4Reference:
+            guard referenceA4Hz.isFinite, (200...800).contains(referenceA4Hz) else {
+                return nil
+            }
+            reference = referenceA4Hz
         }
+        let semitones = 12 * (octave - 4) + noteClass - 9
+        return reference * pow(2.0, Double(semitones) / 12.0)
+    }
+
+    init(from decoder: Decoder) throws {
+        let name = try decoder.singleValueContainer().decode(String.self)
+        // User's prior five-limit setting is no longer presented. Preserve
+        // compatibility with existing stored sequences while converting.
+        self = name == "naturalFiveLimitC" ? .equalA432 :
+            (CarrierPitchTuning(rawValue: name) ?? .manualHz)
     }
 }
 
-/// User-authored acoustic sequence. No arbitrary count cap. A UUID prevents
-/// edited/removed rows from accidentally mutating their neighbors.
 struct PsychoacousticProgramStage: Codable, Equatable, Identifiable {
     var id: UUID = UUID()
     var durationSeconds: Int
@@ -678,6 +840,7 @@ struct PsychoacousticProgramStage: Codable, Equatable, Identifiable {
     var tuning: CarrierPitchTuning = .manualHz
     var noteClass: Int = 9
     var octave: Int = 3
+    var referenceA4Hz: Double = 432
 
     init(durationMinutes: Int, beatHz: Double, carrierHz: Double = 240) {
         durationSeconds = durationMinutes * 60
@@ -688,6 +851,59 @@ struct PsychoacousticProgramStage: Codable, Equatable, Identifiable {
     var durationMinutes: Int {
         get { durationSeconds / 60 }
         set { durationSeconds = newValue * 60 }
+    }
+
+    func tunedCarrier(for note: Int, octave requestedOctave: Int) -> Double? {
+        tuning.frequency(noteClass: note, octave: requestedOctave,
+                         referenceA4Hz: referenceA4Hz)
+    }
+
+    /// Notes below 100 Hz (including C0 and C1) or above 800 Hz cannot be
+    /// played by this validated renderer; show them disabled, not silently
+    /// clamp to another pitch. C2–C5 are partially available.
+    func supports(note: Int, octave: Int) -> Bool {
+        guard let hz = tunedCarrier(for: note, octave: octave) else { return false }
+        return (100...800).contains(hz) && hz + beatHz <= 840
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, durationSeconds, beatHz, carrierHz, tuning, noteClass, octave, referenceA4Hz
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        durationSeconds = try values.decode(Int.self, forKey: .durationSeconds)
+        beatHz = try values.decode(Double.self, forKey: .beatHz)
+        carrierHz = try values.decode(Double.self, forKey: .carrierHz)
+        let legacyRaw = try values.decodeIfPresent(String.self, forKey: .tuning)
+        tuning = (legacyRaw == "naturalFiveLimitC" ? .equalA432 :
+            (legacyRaw.flatMap(CarrierPitchTuning.init(rawValue:)) ?? .manualHz))
+        noteClass = try values.decodeIfPresent(Int.self, forKey: .noteClass) ?? 9
+        octave = try values.decodeIfPresent(Int.self, forKey: .octave) ?? 3
+        referenceA4Hz = try values.decodeIfPresent(Double.self, forKey: .referenceA4Hz) ?? 432
+        // Convert removed 5-limit saved notes to 432 equal-temperament,
+        // rather than labeling the old 5-limit pitch as 432.
+        if legacyRaw == "naturalFiveLimitC",
+           let newHz = tuning.frequency(noteClass: noteClass, octave: octave) {
+            if (100...800).contains(newHz), newHz + beatHz <= 840 {
+                carrierHz = newHz
+            } else {
+                tuning = .manualHz
+            }
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(durationSeconds, forKey: .durationSeconds)
+        try values.encode(beatHz, forKey: .beatHz)
+        try values.encode(carrierHz, forKey: .carrierHz)
+        try values.encode(tuning, forKey: .tuning)
+        try values.encode(noteClass, forKey: .noteClass)
+        try values.encode(octave, forKey: .octave)
+        try values.encode(referenceA4Hz, forKey: .referenceA4Hz)
     }
 }
 
@@ -704,7 +920,9 @@ struct PsychoacousticStageTimeline {
                   (1...40).contains(stage.beatHz),
                   stage.carrierHz.isFinite, (100...800).contains(stage.carrierHz),
                   stage.carrierHz + stage.beatHz <= 840,
-                  (0..<12).contains(stage.noteClass), (0...8).contains(stage.octave) else {
+                  (0..<12).contains(stage.noteClass), (0...5).contains(stage.octave),
+                  stage.referenceA4Hz.isFinite,
+                  (200...800).contains(stage.referenceA4Hz) else {
                 return nil
             }
             let (sum, overflow) = total.addingReportingOverflow(stage.durationSeconds)
@@ -763,4 +981,53 @@ struct SavedPsychoacousticSequence: Codable, Identifiable {
     let id: UUID
     let name: String
     let stages: [PsychoacousticProgramStage]
+}
+
+/// JSON snapshot of the psychoacoustic engine only.
+/// Sound presets never include video or metronome state, and loading them
+/// deliberately does not auto-play audio.
+struct PsychoacousticSoundSettings: Codable {
+    let carrierHz: Double
+    let beatHz: Double
+    let gain: Double
+    let modeRaw: String
+    let whiteNoise: Double
+    let pinkNoise: Double
+    let brownNoise: Double
+    let sessionMinutes: Int
+    let customSessionSeconds: Int?
+    let fadeDurationSeconds: Int
+    let selectedProgramRaw: String?
+    let stages: [PsychoacousticProgramStage]
+
+    var isValid: Bool {
+        guard carrierHz.isFinite, (100...800).contains(carrierHz),
+              beatHz.isFinite, (1...40).contains(beatHz),
+              carrierHz + beatHz <= 840,
+              gain.isFinite, (0...PsychoacousticGainPolicy.maximum).contains(gain),
+              PsychoacousticMode(rawValue: modeRaw) != nil,
+              [whiteNoise, pinkNoise, brownNoise].allSatisfy {
+                  $0.isFinite && (0...0.2).contains($0)
+              },
+              sessionMinutes >= 0 && sessionMinutes < Int.max / 60,
+              customSessionSeconds.map({ $0 >= 10 }) ?? true,
+              [5, 10, 20, 30].contains(fadeDurationSeconds),
+              PsychoacousticStageTimeline(stages: stages).isValid else { return false }
+        if let selectedProgramRaw {
+            guard let program = ExperimentalListeningProgram(rawValue: selectedProgramRaw) else {
+                return false
+            }
+            if program != .threeStageArc {
+                guard abs(carrierHz - program.initialLeftHz) < 0.000001,
+                      abs(beatHz - program.initialBeatHz) < 0.000001 else { return false }
+            }
+        }
+        return true
+    }
+}
+
+struct PsychoacousticSoundPreset: Codable, Identifiable {
+    let id: UUID
+    let name: String
+    let settings: PsychoacousticSoundSettings
 }

@@ -726,21 +726,87 @@ final class ParallelTests: XCTestCase {
         XCTAssertEqual(restored[0].name, sequence.name)
     }
 
-    func testMusicalCarrierTuning440AndNaturalAreExplicit() {
-        XCTAssertEqual(CarrierPitchTuning.equalA440.frequency(noteClass: 9, octave: 4)!, 440,
-                       accuracy: 0.000001)
-        XCTAssertEqual(CarrierPitchTuning.equalA440.frequency(noteClass: 0, octave: 4)!, 261.625565,
-                       accuracy: 0.00001)
-        XCTAssertEqual(CarrierPitchTuning.naturalFiveLimitC.frequency(noteClass: 9, octave: 4)!, 440,
-                       accuracy: 0.000001)
-        XCTAssertEqual(CarrierPitchTuning.naturalFiveLimitC.frequency(noteClass: 0, octave: 4)!, 264,
-                       accuracy: 0.000001)
-        XCTAssertEqual(CarrierPitchTuning.naturalFiveLimitC.frequency(noteClass: 4, octave: 4)!, 330,
-                       accuracy: 0.000001)
+    func test432AndCustomA4ReferenceUseEqualTemperament() {
+        XCTAssertEqual(CarrierPitchTuning.equalA440.frequency(noteClass: 9, octave: 4)!,
+                       440, accuracy: 0.000001)
+        XCTAssertEqual(CarrierPitchTuning.equalA432.frequency(noteClass: 9, octave: 4)!,
+                       432, accuracy: 0.000001)
+        XCTAssertEqual(CarrierPitchTuning.equalA432.frequency(noteClass: 11, octave: 4)!,
+                       432 * pow(2.0, 2.0 / 12.0), accuracy: 0.000001)
+        XCTAssertEqual(CarrierPitchTuning.customA4Reference.frequency(
+            noteClass: 9, octave: 4, referenceA4Hz: 444)!, 444, accuracy: 0.000001)
+        XCTAssertEqual(CarrierPitchTuning.customA4Reference.frequency(
+            noteClass: 11, octave: 4, referenceA4Hz: 444)!,
+            444 * pow(2.0, 2.0 / 12.0), accuracy: 0.000001)
+        XCTAssertEqual(CarrierPitchTuning.equalA440.frequency(noteClass: 0, octave: 4)!,
+                       261.625565, accuracy: 0.00001)
         XCTAssertEqual(CarrierPitchTuning.noteNames[0], "C / B♯")
         XCTAssertEqual(CarrierPitchTuning.noteNames[8], "G♯ / A♭")
         XCTAssertNil(CarrierPitchTuning.equalA440.frequency(noteClass: -1, octave: 4))
+        XCTAssertNil(CarrierPitchTuning.equalA440.frequency(noteClass: 0, octave: 6))
         XCTAssertNil(CarrierPitchTuning.manualHz.frequency(noteClass: 9, octave: 4))
+        XCTAssertNil(CarrierPitchTuning.customA4Reference.frequency(
+            noteClass: 9, octave: 4, referenceA4Hz: .nan))
+        XCTAssertFalse(CarrierPitchTuning.allCases.contains { $0.rawValue == "naturalFiveLimitC" })
+    }
+
+    func testOctavesOnlyOfferSupportedCarrierRange() {
+        var stage = PsychoacousticProgramStage(durationMinutes: 2, beatHz: 6, carrierHz: 440)
+        stage.tuning = .equalA432
+        XCTAssertFalse(stage.supports(note: 0, octave: 0)) // C0 below human hearing
+        XCTAssertFalse(stage.supports(note: 0, octave: 1))
+        XCTAssertFalse(stage.supports(note: 0, octave: 2)) // C2 <100Hz engine bound
+        XCTAssertTrue(stage.supports(note: 9, octave: 2)) // A2 108Hz
+        XCTAssertTrue(stage.supports(note: 0, octave: 3))
+        XCTAssertTrue(stage.supports(note: 0, octave: 5))
+        XCTAssertFalse(stage.supports(note: 11, octave: 5)) // B5 exceeds 800Hz
+        stage.tuning = .customA4Reference
+        stage.referenceA4Hz = 512
+        XCTAssertEqual(stage.tunedCarrier(for: 9, octave: 4)!, 512,
+                       accuracy: 0.000001)
+        stage.referenceA4Hz = 0
+        XCTAssertFalse(stage.supports(note: 9, octave: 4))
+    }
+
+    func testLegacyFiveLimitStageMigratesWithoutPreservingOldTuning() throws {
+        var legacy = PsychoacousticProgramStage(durationMinutes: 2, beatHz: 6, carrierHz: 264)
+        legacy.tuning = .equalA440
+        legacy.noteClass = 0
+        legacy.octave = 4
+        let original = String(decoding: try JSONEncoder().encode(legacy), as: UTF8.self)
+        let changed = original.replacingOccurrences(of: "equalA440", with: "naturalFiveLimitC")
+        let restored = try JSONDecoder().decode(
+            PsychoacousticProgramStage.self, from: Data(changed.utf8))
+        XCTAssertEqual(restored.tuning, .equalA432)
+        XCTAssertEqual(restored.carrierHz,
+                       CarrierPitchTuning.equalA432.frequency(noteClass: 0, octave: 4)!,
+                       accuracy: 0.000001)
+        XCTAssertEqual(restored.referenceA4Hz, 432, accuracy: 0.000001)
+    }
+
+    func testPsychoacousticPresetJSONExcludesVideoAndMetronomeState() throws {
+        let stages = [PsychoacousticProgramStage(durationMinutes: 5, beatHz: 6,
+                                                  carrierHz: 244)]
+        let settings = PsychoacousticSoundSettings(
+            carrierHz: 244, beatHz: 6, gain: 0.2, modeRaw: "binaural",
+            whiteNoise: 0.02, pinkNoise: 0.05, brownNoise: 0,
+            sessionMinutes: 5, customSessionSeconds: nil, fadeDurationSeconds: 20,
+            selectedProgramRaw: "steadySix", stages: stages
+        )
+        XCTAssertTrue(settings.isValid)
+        let preset = PsychoacousticSoundPreset(id: UUID(), name: "Evening focus",
+                                                settings: settings)
+        let json = try JSONEncoder().encode(preset)
+        let decoded = try JSONDecoder().decode(PsychoacousticSoundPreset.self, from: json)
+        XCTAssertEqual(decoded.name, "Evening focus")
+        XCTAssertEqual(decoded.settings.carrierHz, 244, accuracy: 0.000001)
+        XCTAssertEqual(decoded.settings.pinkNoise, 0.05, accuracy: 0.000001)
+        XCTAssertEqual(decoded.settings.fadeDurationSeconds, 20)
+        XCTAssertTrue(decoded.settings.isValid)
+        let encodedText = String(decoding: json, as: UTF8.self)
+        XCTAssertFalse(encodedText.contains("metronome"))
+        XCTAssertFalse(encodedText.contains("AVPlayer"))
+        XCTAssertFalse(encodedText.contains("video"))
     }
 
     func testStageTimelineSupportsAnyPracticalStageCountAndHourLongDurations() {
