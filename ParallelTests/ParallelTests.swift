@@ -698,6 +698,16 @@ final class ParallelTests: XCTestCase {
         }
     }
 
+    func testExtendedSessionClockUsesHoursOnlyWhenNeeded() {
+        XCTAssertEqual(ParallelCountdownFormatter.clock(0), "00:00")
+        XCTAssertEqual(ParallelCountdownFormatter.clock(59.2), "01:00")
+        XCTAssertEqual(ParallelCountdownFormatter.clock(3599), "59:59")
+        XCTAssertEqual(ParallelCountdownFormatter.clock(3600), "1:00:00")
+        XCTAssertEqual(ParallelCountdownFormatter.clock(3675), "1:01:15")
+        XCTAssertEqual(ParallelCountdownFormatter.clock(86_400), "24:00:00")
+        XCTAssertEqual(ParallelCountdownFormatter.clock(.nan), "00:00")
+    }
+
     func testNamedSequenceLibraryRoundTripsStageIDsAndPitchTuning() throws {
         var stage = PsychoacousticProgramStage(durationMinutes: 7, beatHz: 6.5, carrierHz: 440)
         stage.tuning = .equalA440

@@ -415,8 +415,7 @@ struct ContentView: View {
     }
 
     private static func formatCountdown(_ seconds: TimeInterval) -> String {
-        let total = max(0, Int(ceil(seconds)))
-        return String(format: "%02d:%02d", total / 60, total % 60)
+        ParallelCountdownFormatter.clock(seconds)
     }
 
     private func noiseSlider(_ title: String, value: Binding<Double>) -> some View {
@@ -678,6 +677,21 @@ private struct PsychoacousticStageEditor: View {
                 }
             }
         }
+    }
+}
+
+/// Precise extended countdown without forcing 60+ minutes into MM:SS.
+enum ParallelCountdownFormatter {
+    static func clock(_ seconds: TimeInterval) -> String {
+        guard seconds.isFinite, seconds > 0, seconds < TimeInterval(Int.max - 1) else {
+            return "00:00"
+        }
+        let total = Int(ceil(seconds))
+        if total >= 3600 {
+            return String(format: "%d:%02d:%02d", total / 3600,
+                          (total % 3600) / 60, total % 60)
+        }
+        return String(format: "%02d:%02d", total / 60, total % 60)
     }
 }
 
