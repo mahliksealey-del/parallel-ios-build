@@ -18,6 +18,8 @@ struct ContentView: View {
     @State private var isDraggingPsychoGain = false
     // First-party channel trim is independent of the original per-source controls.
     @State private var showingMiniMixer = false
+    @State private var metronomeExpanded = false
+    @State private var psychoExpanded = false
     @State private var channelTrims: [Double] = Array(repeating: 1, count: 5)
     @State private var mutedChannels: Set<Int> = []
     @State private var soloChannels: Set<Int> = []
@@ -53,6 +55,19 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                Section {
+                    Button {
+                        withAnimation { metronomeExpanded.toggle() }
+                    } label: {
+                        HStack {
+                            Label("Metronome", systemImage: "metronome")
+                            Spacer()
+                            Image(systemName: metronomeExpanded ? "chevron.up" : "chevron.down")
+                        }
+                    }
+                    .accessibilityIdentifier("metronome-accordion")
+                }
+                if metronomeExpanded {
                 Section("Tempo") {
                     HStack {
                         Text("\(Int(model.bpm)) BPM").font(.title2.monospacedDigit().bold())
@@ -106,6 +121,28 @@ struct ContentView: View {
                     Text(model.routeDescription).font(.footnote).foregroundStyle(.secondary)
                 }
 
+                }
+
+                Section {
+                    HStack {
+                        Button {
+                            withAnimation { psychoExpanded.toggle() }
+                        } label: {
+                            HStack {
+                                Label("Psychoacoustics", systemImage: "waveform")
+                                Image(systemName: psychoExpanded ? "chevron.up" : "chevron.down")
+                            }
+                        }
+                        .accessibilityIdentifier("psychoacoustic-accordion")
+                        Spacer()
+                        Button(psychoacoustic.isPlaying ? "Stop" : "Play") {
+                            psychoacoustic.togglePlayback()
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("psychoacoustic-quick-transport")
+                    }
+                }
+                if psychoExpanded {
                 Section("PsychoacousticEngine") {
                     Text("Experimental audio synthesis. Stereo headphones required. No medical or performance effects are implied.")
                         .font(.footnote)
@@ -185,6 +222,10 @@ struct ContentView: View {
                                    ? "Playing in stereo headphones" : "Stopped")
                 }
 
+                Section("Experimental listening programs") {
+                    PsychoacousticProgramEditor(psychoacoustic: psychoacoustic)
+                }
+
                 Section("Procedural noise layers") {
                     noiseSlider("White noise", value: $psychoacoustic.whiteNoise)
                     noiseSlider("Pink noise", value: $psychoacoustic.pinkNoise)
@@ -193,9 +234,6 @@ struct ContentView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                .onChange(of: psychoacoustic.whiteNoise) { _ in psychoacoustic.applyLayers() }
-                .onChange(of: psychoacoustic.pinkNoise) { _ in psychoacoustic.applyLayers() }
-                .onChange(of: psychoacoustic.brownNoise) { _ in psychoacoustic.applyLayers() }
 
                 Section("Presets and session") {
                     HStack {
@@ -203,7 +241,15 @@ struct ContentView: View {
                         Button("Calm") { psychoacoustic.applyPreset(.calm) }
                         Button("Rest") { psychoacoustic.applyPreset(.rest) }
                     }
-                    Picker("Stop after", selection: $psychoacoustic.sessionMinutes) {
+                    if psychoacoustic.selectedProgram == nil {
+                        if let custom = psychoacoustic.customSessionSeconds {
+                            LabeledContent("Custom duration",
+                                value: Self.formatCountdown(TimeInterval(custom)))
+                            Text("Changing Stop after returns to a standard duration.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Picker("Stop after", selection: $psychoacoustic.sessionMinutes) {
                         Text("Manual").tag(0)
                         Text("5 minutes").tag(5)
                         Text("15 minutes").tag(15)
@@ -212,7 +258,10 @@ struct ContentView: View {
                     .onChange(of: psychoacoustic.sessionMinutes) { _ in
                         psychoacoustic.applySessionTimer()
                     }
-                    .disabled(psychoacoustic.selectedProgram != nil)
+                    } else {
+                        LabeledContent("Program length", value:
+                            Self.formatCountdown(TimeInterval(psychoacoustic.configuredSessionSeconds)))
+                    }
                     Picker("End fade", selection: $psychoacoustic.fadeDurationSeconds) {
                         Text("5 seconds").tag(5)
                         Text("10 seconds").tag(10)
@@ -241,6 +290,8 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                }
+
                 if let error = psychoacoustic.errorMessage {
                     Section("Psychoacoustic audio problem") {
                         Text(error).foregroundStyle(.red)
@@ -254,6 +305,11 @@ struct ContentView: View {
                     }
                 }
             }
+            // One observer stays active whether the psychoacoustic accordion
+            // is expanded or the Mini Mixer sheet is showing.
+            .onChange(of: psychoacoustic.whiteNoise) { _ in psychoacoustic.applyLayers() }
+            .onChange(of: psychoacoustic.pinkNoise) { _ in psychoacoustic.applyLayers() }
+            .onChange(of: psychoacoustic.brownNoise) { _ in psychoacoustic.applyLayers() }
             .navigationTitle("Parallel")
             .sheet(isPresented: $showingMiniMixer) {
                 NavigationStack {
@@ -300,59 +356,16 @@ struct ContentView: View {
                                 }
                             }
                         }
-                        Section("Experimental listening programs") {
-                            Text("Specified acoustic sequences, not validated brain-state changes, treatment or performance enhancement. Stereo headphones are required.")
+                        Section("Procedural noise layers") {
+                            Text("Live independent white, pink and brown layers. All mix into the psychoacoustic source, not a separate AVPlayer.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            noiseSlider("White noise", value: $psychoacoustic.whiteNoise)
+                            noiseSlider("Pink noise", value: $psychoacoustic.pinkNoise)
+                            noiseSlider("Brown noise", value: $psychoacoustic.brownNoise)
+                            Text("Changing a research-reference program's noise produces a modified experimental stimulus.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
-                            ForEach(ExperimentalListeningProgram.allCases, id: \.self) { program in
-                                Button(program.label) {
-                                    psychoacoustic.chooseExperimentalProgram(program)
-                                }
-                                .disabled(psychoacoustic.isPlaying)
-                            }
-                            if let program = psychoacoustic.selectedProgram {
-                                LabeledContent("Selected", value: program.label)
-                                if program == .threeStageArc {
-                                    LabeledContent("Total duration",
-                                        value: "\(psychoacoustic.sessionMinutes) minutes")
-                                    ForEach(0..<3, id: \.self) { index in
-                                        let stage = psychoacoustic.editableStages[index]
-                                        VStack(alignment: .leading, spacing: 5) {
-                                            Text("Stage \(index + 1)").font(.headline)
-                                            Stepper(
-                                                "Duration · \(stage.durationMinutes) min",
-                                                value: Binding(
-                                                    get: { psychoacoustic.editableStages[index].durationMinutes },
-                                                    set: { psychoacoustic.updateProgramStage(
-                                                        index: index, durationMinutes: $0) }
-                                                ), in: 1...10
-                                            )
-                                            Stepper(
-                                                "Stereo difference · \(Int(stage.beatHz)) Hz",
-                                                value: Binding(
-                                                    get: { Int(psychoacoustic.editableStages[index].beatHz) },
-                                                    set: { psychoacoustic.updateProgramStage(
-                                                        index: index, beatHz: Double($0)) }
-                                                ), in: 1...40
-                                            )
-                                        }
-                                        .disabled(psychoacoustic.isPlaying)
-                                    }
-                                    Text("Last 10 seconds of stages 1 and 2 glide to the next programmed difference. Stages are acoustic stimuli, not measured mental states.")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                if let beat = psychoacoustic.programCurrentBeatHz {
-                                    LabeledContent("Current stimulus difference",
-                                        value: String(format: "%.1f Hz", beat))
-                                }
-                                Button("Clear program") {
-                                    psychoacoustic.chooseExperimentalProgram(nil)
-                                }
-                                .disabled(psychoacoustic.isPlaying)
-                            }
-                            Link("Read scientific context", destination:
-                                URL(string: "https://doi.org/10.1371/journal.pone.0335580")!)
                         }
                         Section {
                             Text("These controls affect only Parallel's three videos, metronome and generated stereo psychoacoustics. No third-party app volume or unmeasured master level is represented.")
@@ -404,7 +417,227 @@ struct ContentView: View {
             LabeledContent(title, value: "\(Int(value.wrappedValue * 100))%")
             Slider(value: value, in: 0...0.2)
                 .accessibilityLabel(title)
-                .disabled(psychoacoustic.selectedProgram != nil)
+        }
+    }
+}
+
+/// Independent editing workspace. Controls are intentionally outside the
+/// main Form's body to keep the three-video launch screen compact.
+private struct PsychoacousticProgramEditor: View {
+    @ObservedObject var psychoacoustic: PsychoacousticViewModel
+    @State private var hours = "1"
+    @State private var minutes = "0"
+    @State private var seconds = "0"
+    @State private var durationError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Research references keep their documented timing and carriers. Your editable programs are independent listening experiments, not EEG prescriptions.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            ForEach(ExperimentalListeningProgram.allCases, id: \.self) { program in
+                Button {
+                    psychoacoustic.chooseExperimentalProgram(program)
+                } label: {
+                    HStack {
+                        Text(program.label)
+                        Spacer()
+                        if psychoacoustic.selectedProgram == program {
+                            Image(systemName: "checkmark.circle.fill")
+                        }
+                    }
+                }
+                .disabled(psychoacoustic.isPlaying)
+                .accessibilityIdentifier("listening-program-\(program.rawValue)")
+            }
+            if psychoacoustic.selectedProgram != nil {
+                Button("Clear program · manual sound") {
+                    psychoacoustic.chooseExperimentalProgram(nil)
+                }
+                .disabled(psychoacoustic.isPlaying)
+            }
+            if psychoacoustic.selectedProgram == .threeStageArc {
+                LabeledContent("Custom sequence duration",
+                    value: Self.durationLabel(psychoacoustic.configuredSessionSeconds))
+                ForEach(psychoacoustic.editableStages) { stage in
+                    PsychoacousticStageEditor(psychoacoustic: psychoacoustic, stageID: stage.id)
+                }
+                Button {
+                    psychoacoustic.addProgramStage()
+                } label: {
+                    Label("Add another stage", systemImage: "plus.circle")
+                }
+                .disabled(psychoacoustic.isPlaying)
+                .accessibilityIdentifier("listening-stage-add")
+                Text("No fixed stage-count or 30-minute limit. Every stage can specify its own carrier and binaural difference. Longer sequences use more device resources.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if psychoacoustic.selectedProgram == .threeStageArc ||
+               psychoacoustic.selectedProgram == nil {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Custom session length").font(.headline)
+                    HStack {
+                        TextField("Hours", text: $hours)
+                            .keyboardType(.numberPad)
+                            .accessibilityLabel("Session hours")
+                        Text("h")
+                        TextField("Minutes", text: $minutes)
+                            .keyboardType(.numberPad)
+                            .accessibilityLabel("Session minutes")
+                        Text("m")
+                        TextField("Seconds", text: $seconds)
+                            .keyboardType(.numberPad)
+                            .accessibilityLabel("Session seconds")
+                        Text("s")
+                    }
+                    .textFieldStyle(.roundedBorder)
+                    Button(psychoacoustic.selectedProgram == .threeStageArc
+                           ? "Set length · distribute stages evenly"
+                           : "Set custom session length") {
+                        applyCustomDuration()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(psychoacoustic.isPlaying)
+                    .accessibilityIdentifier("listening-duration-distribute")
+                    Text("Duration is split to the nearest second; extra seconds go to the first stages. Minimum 10 seconds per stage.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Text("This reference keeps its fixed five-minute experimental stimulus. Select Editable sequence to adjust carrier notes, rates and timing.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let durationError {
+                Text(durationError).font(.caption).foregroundStyle(.red)
+            }
+            if let difference = psychoacoustic.programCurrentBeatHz {
+                LabeledContent("Current binaural difference",
+                    value: String(format: "%.2f Hz", difference))
+            }
+            Link("Review binaural-beat evidence",
+                destination: URL(string: "https://doi.org/10.1371/journal.pone.0286023")!)
+                .font(.footnote)
+        }
+    }
+
+    private func applyCustomDuration() {
+        guard let h = Int(hours), let m = Int(minutes), let s = Int(seconds),
+              h >= 0, h < (Int.max - 3599) / 3600,
+              (0...59).contains(m), (0...59).contains(s) else {
+            durationError = "Enter nonnegative hours and 0–59 minutes/seconds."
+            return
+        }
+        let total = h * 3600 + m * 60 + s
+        guard total >= 10 else {
+            durationError = "Session must last at least 10 seconds."
+            return
+        }
+        psychoacoustic.setCustomSessionDuration(seconds: total)
+        durationError = nil
+    }
+
+    private static func durationLabel(_ value: Int) -> String {
+        let h = value / 3600
+        let m = (value % 3600) / 60
+        let s = value % 60
+        return String(format: "%d:%02d:%02d", h, m, s)
+    }
+}
+
+private struct PsychoacousticStageEditor: View {
+    @ObservedObject var psychoacoustic: PsychoacousticViewModel
+    let stageID: UUID
+    @State private var expanded = false
+
+    var body: some View {
+        if let stage = psychoacoustic.editableStages.first(where: { $0.id == stageID }),
+           let index = psychoacoustic.editableStages.firstIndex(where: { $0.id == stageID }) {
+            DisclosureGroup(isExpanded: $expanded) {
+                VStack(alignment: .leading, spacing: 10) {
+                    TextField("Stage length (seconds)",
+                        value: Binding<Int>(
+                            get: { stage.durationSeconds },
+                            set: { psychoacoustic.updateProgramStage(
+                                id: stageID, durationSeconds: $0) }),
+                        format: .number)
+                        .keyboardType(.numberPad)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(psychoacoustic.isPlaying)
+                    Picker("Carrier input", selection: Binding<CarrierPitchTuning>(
+                        get: { stage.tuning },
+                        set: { psychoacoustic.updateProgramStage(id: stageID, tuning: $0) }
+                    )) {
+                        ForEach(CarrierPitchTuning.allCases, id: \.self) { mode in
+                            Text(mode.label).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .disabled(psychoacoustic.isPlaying)
+                    if stage.tuning == .manualHz {
+                        TextField("Left carrier (Hz)",
+                            value: Binding<Double>(
+                                get: { stage.carrierHz },
+                                set: { psychoacoustic.updateProgramStage(id: stageID, carrierHz: $0) }),
+                            format: .number.precision(.fractionLength(0...2)))
+                            .keyboardType(.decimalPad)
+                            .textFieldStyle(.roundedBorder)
+                            .disabled(psychoacoustic.isPlaying)
+                            .accessibilityIdentifier("stage-carrier-hz-\(index)")
+                    } else {
+                        Picker("Musical note", selection: Binding<Int>(
+                            get: { stage.noteClass },
+                            set: { psychoacoustic.updateProgramStage(id: stageID, noteClass: $0) }
+                        )) {
+                            ForEach(0..<12, id: \.self) { pitchClass in
+                                Text(CarrierPitchTuning.noteNames[pitchClass]).tag(pitchClass)
+                            }
+                        }
+                        .disabled(psychoacoustic.isPlaying)
+                        Picker("Octave", selection: Binding<Int>(
+                            get: { stage.octave },
+                            set: { psychoacoustic.updateProgramStage(id: stageID, octave: $0) }
+                        )) {
+                            ForEach(2...5, id: \.self) { octave in
+                                Text("\(octave)").tag(octave)
+                            }
+                        }
+                        .disabled(psychoacoustic.isPlaying)
+                    }
+                    TextField("Binaural difference (Hz)",
+                        value: Binding<Double>(
+                            get: { stage.beatHz },
+                            set: { psychoacoustic.updateProgramStage(id: stageID, beatHz: $0) }),
+                        format: .number.precision(.fractionLength(0...2)))
+                        .keyboardType(.decimalPad)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(psychoacoustic.isPlaying)
+                        .accessibilityIdentifier("stage-beat-hz-\(index)")
+                    LabeledContent("Left ear",
+                        value: String(format: "%.2f Hz", stage.carrierHz))
+                    LabeledContent("Right ear",
+                        value: String(format: "%.2f Hz", stage.carrierHz + stage.beatHz))
+                    Text("Quartal tuning — coming soon")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Remove stage", role: .destructive) {
+                        psychoacoustic.removeProgramStage(id: stageID)
+                    }
+                    .disabled(psychoacoustic.isPlaying || psychoacoustic.editableStages.count <= 1)
+                }
+                .padding(.vertical, 6)
+            } label: {
+                VStack(alignment: .leading) {
+                    Text("Stage \(index + 1)")
+                        .font(.subheadline.bold())
+                    Text(String(format: "%.1f Hz beat · %.2f Hz carrier · %d:%02d",
+                        stage.beatHz, stage.carrierHz,
+                        stage.durationSeconds / 60, stage.durationSeconds % 60))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
     }
 }

@@ -19,10 +19,11 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
     @Published private(set) var selectedProgram: ExperimentalListeningProgram?
     @Published private(set) var programCurrentBeatHz: Double?
     @Published private(set) var editableStages = [
-        PsychoacousticProgramStage(durationMinutes: 2, beatHz: 10),
-        PsychoacousticProgramStage(durationMinutes: 2, beatHz: 8),
-        PsychoacousticProgramStage(durationMinutes: 1, beatHz: 6)
+        PsychoacousticProgramStage(durationMinutes: 2, beatHz: 10, carrierHz: 240),
+        PsychoacousticProgramStage(durationMinutes: 2, beatHz: 8, carrierHz: 242),
+        PsychoacousticProgramStage(durationMinutes: 1, beatHz: 6, carrierHz: 244)
     ]
+    @Published private(set) var customSessionSeconds: Int?
     @Published private(set) var isPlaying = false
     @Published private(set) var remainingSeconds: TimeInterval?
     @Published private(set) var fadeRemainingSeconds: TimeInterval?
@@ -63,6 +64,15 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
             whiteNoise = min(0.2, max(0, defaults.double(forKey: "psycho.white")))
             pinkNoise = min(0.2, max(0, defaults.double(forKey: "psycho.pink")))
             brownNoise = min(0.2, max(0, defaults.double(forKey: "psycho.brown")))
+        }
+        if let data = defaults.data(forKey: "psycho.stages.v2"),
+           let saved = try? JSONDecoder().decode([PsychoacousticProgramStage].self, from: data),
+           PsychoacousticStageTimeline(stages: saved).isValid {
+            editableStages = saved
+        }
+        if let seconds = defaults.object(forKey: "psycho.customDuration.v2") as? Int,
+           seconds >= 10 {
+            customSessionSeconds = seconds
         }
         let savedFade = defaults.integer(forKey: "psycho.fadeDuration")
         if [5, 10, 20, 30].contains(savedFade) {
@@ -123,7 +133,11 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
             errorMessage = "Noise levels must be between 0 and 20%."
             return
         }
-        guard isPlaying else { return }
+        guard isPlaying else {
+            errorMessage = nil
+            persist()
+            return
+        }
         let modeOK = graph.updatePsychoacousticMode(mode)
         let noiseOK = graph.updatePsychoacousticNoise(noiseLevels)
         errorMessage = modeOK && noiseOK ? nil
@@ -144,18 +158,21 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
         persist()
     }
 
-    func applySessionTimer() {
-        // A custom duration deliberately exits the fixed 5-minute acoustic
-        // comparison rather than claiming the source study used other timing.
+    /// Exact session duration, allowing hours rather than only whole minutes.
+    /// Previously published research-reference timings are never retimed.
+    var configuredSessionSeconds: Int {
         if let program = selectedProgram {
-            let expectedMinutes = program == .threeStageArc
-                ? editableStages.reduce(0) { $0 + $1.durationMinutes }
-                : 5
-            if sessionMinutes != expectedMinutes {
-                selectedProgram = nil
-                programCurrentBeatHz = nil
-            }
+            return program == .threeStageArc
+                ? (PsychoacousticStageTimeline(stages: editableStages).durationSeconds ?? 0)
+                : 300
         }
+        return customSessionSeconds ?? (sessionMinutes * 60)
+    }
+
+    func applySessionTimer() {
+        guard selectedProgram == nil else { return }
+        customSessionSeconds = nil
+        UserDefaults.standard.removeObject(forKey: "psycho.customDuration.v2")
         if isPlaying { scheduleStopIfNeeded() }
     }
 
@@ -165,57 +182,154 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
             return
         }
         UserDefaults.standard.set(fadeDurationSeconds, forKey: "psycho.fadeDuration")
-        // The existing uptime deadline remains intact; only the ending
-        // envelope length changes. No restart or surprise auto-play.
     }
 
+    /// This overload preserves the original UI while the editor is migrated.
     func updateProgramStage(index: Int, durationMinutes: Int? = nil, beatHz: Double? = nil) {
-        guard !isPlaying, editableStages.indices.contains(index) else { return }
-        var revised = editableStages
-        if let durationMinutes { revised[index].durationMinutes = durationMinutes }
-        if let beatHz { revised[index].beatHz = beatHz }
+        guard editableStages.indices.contains(index) else { return }
+        updateProgramStage(
+            id: editableStages[index].id,
+            durationSeconds: durationMinutes.map { $0 * 60 }, beatHz: beatHz
+        )
+    }
+
+    func updateProgramStage(
+        id: UUID, durationSeconds: Int? = nil, beatHz: Double? = nil,
+        carrierHz: Double? = nil, tuning: CarrierPitchTuning? = nil,
+        noteClass: Int? = nil, octave: Int? = nil
+    ) {
+        guard !isPlaying, let index = editableStages.firstIndex(where: { $0.id == id }) else {
+            errorMessage = "Stop psychoacoustic audio to edit a stage."
+            return
+        }
+        var updated = editableStages
+        if let durationSeconds { updated[index].durationSeconds = durationSeconds }
+        if let beatHz { updated[index].beatHz = beatHz }
+        if let tuning { updated[index].tuning = tuning }
+        if let noteClass { updated[index].noteClass = noteClass }
+        if let octave { updated[index].octave = octave }
+        if let carrierHz {
+            updated[index].carrierHz = carrierHz
+            updated[index].tuning = .manualHz
+        } else if updated[index].tuning != .manualHz,
+                  let pitch = updated[index].tuning.frequency(
+                    noteClass: updated[index].noteClass, octave: updated[index].octave) {
+            updated[index].carrierHz = pitch
+        }
+        guard PsychoacousticStageTimeline(stages: updated).isValid else {
+            errorMessage = "Stage invalid: use a 100–800 Hz carrier, a 1–40 Hz stereo difference and at least 10 seconds. Try another note/octave."
+            return
+        }
+        editableStages = updated
+        syncFirstStageIfSelected()
+        persistEditableStages()
+        errorMessage = nil
+    }
+
+    func addProgramStage() {
+        guard !isPlaying else {
+            errorMessage = "Stop psychoacoustic audio to add a stage."
+            return
+        }
+        var next = editableStages.last ??
+            PsychoacousticProgramStage(durationMinutes: 5, beatHz: 6, carrierHz: 244)
+        next.id = UUID()
+        next.durationSeconds = 300
+        let revised = editableStages + [next]
+        guard PsychoacousticStageTimeline(stages: revised).isValid else {
+            errorMessage = "Unable to create another valid stage."
+            return
+        }
+        editableStages = revised
+        syncFirstStageIfSelected()
+        persistEditableStages()
+        errorMessage = nil
+    }
+
+    func removeProgramStage(id: UUID) {
+        guard !isPlaying, editableStages.count > 1 else { return }
+        let revised = editableStages.filter { $0.id != id }
         guard PsychoacousticStageTimeline(stages: revised).isValid else { return }
         editableStages = revised
-        if selectedProgram == .threeStageArc {
-            sessionMinutes = revised.reduce(0) { $0 + $1.durationMinutes }
-            self.beatHz = revised[0].beatHz
-            carrierHz = 250 - revised[0].beatHz
+        syncFirstStageIfSelected()
+        persistEditableStages()
+        errorMessage = nil
+    }
+
+    /// Evenly divides the exact requested total duration over any number
+    /// of stages, assigning one extra second to early stages if necessary.
+    func setCustomSessionDuration(seconds: Int) {
+        guard !isPlaying else {
+            errorMessage = "Stop psychoacoustic audio before setting a new duration."
+            return
         }
+        guard seconds >= 10 else {
+            errorMessage = "Custom sessions must be at least 10 seconds."
+            return
+        }
+        if selectedProgram == .threeStageArc {
+            guard let distributed = PsychoacousticStageTimeline(stages: editableStages)
+                    .distributedEvenly(over: seconds) else {
+                errorMessage = "Allocate at least 10 seconds to each stage."
+                return
+            }
+            editableStages = distributed
+            syncFirstStageIfSelected()
+            persistEditableStages()
+            customSessionSeconds = nil
+        } else if selectedProgram != nil {
+            errorMessage = "The reference listening program keeps its published five-minute timing. Select Editable sequence for custom timing."
+            return
+        } else {
+            customSessionSeconds = seconds
+            UserDefaults.standard.set(seconds, forKey: "psycho.customDuration.v2")
+        }
+        errorMessage = nil
     }
 
     func chooseExperimentalProgram(_ program: ExperimentalListeningProgram?) {
         guard !isPlaying else {
-            errorMessage = "Stop generated audio before changing listening programs."
+            errorMessage = "Stop psychoacoustic audio before switching programs."
+            return
+        }
+        if program == .threeStageArc &&
+            !PsychoacousticStageTimeline(stages: editableStages).isValid {
+            errorMessage = "Check your editable stage settings first."
             return
         }
         selectedProgram = program
         programCurrentBeatHz = nil
         if let program {
+            customSessionSeconds = nil
             if program == .threeStageArc {
-                guard PsychoacousticStageTimeline(stages: editableStages).isValid else {
-                    selectedProgram = nil
-                    errorMessage = "Invalid acoustic stage configuration."
-                    return
-                }
-                sessionMinutes = editableStages.reduce(0) { $0 + $1.durationMinutes }
-                beatHz = editableStages[0].beatHz
-                carrierHz = 250 - beatHz
+                sessionMinutes = 5 // display fallback; actual runtime uses stage seconds
+                syncFirstStageIfSelected()
             } else {
                 sessionMinutes = 5
                 carrierHz = program.initialLeftHz
                 beatHz = program.initialBeatHz
             }
             mode = .binaural
-            // No extra noise confound in these original comparison scenes.
             whiteNoise = 0
             pinkNoise = 0
             brownNoise = 0
         } else {
-            // Avoid retaining an unsupported Picker tag from a custom duration.
             sessionMinutes = 5
         }
         errorMessage = nil
         persist()
+    }
+
+    private func syncFirstStageIfSelected() {
+        guard selectedProgram == .threeStageArc, let first = editableStages.first else { return }
+        carrierHz = first.carrierHz
+        beatHz = first.beatHz
+    }
+
+    private func persistEditableStages() {
+        if let data = try? JSONEncoder().encode(editableStages) {
+            UserDefaults.standard.set(data, forKey: "psycho.stages.v2")
+        }
     }
 
     /// Controls the composite stereo-generated bus, preserving the internal
@@ -292,12 +406,12 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
         cancelSessionClock()
         // The psycho source owns this node. Do not affect the metronome/video paths.
         _ = graph.updatePsychoacousticOutputVolume(mixerLevel)
-        guard isPlaying, sessionMinutes > 0 else { return }
+        guard isPlaying, configuredSessionSeconds > 0 else { return }
 
         // Monotonic deadline avoids cumulative Task.sleep drift and re-syncs
         // the visible countdown after a period with no foreground UI updates.
         // Changing duration intentionally starts a fresh interval, as before.
-        let duration = TimeInterval(sessionMinutes * 60)
+        let duration = TimeInterval(configuredSessionSeconds)
         let startUptime = ProcessInfo.processInfo.systemUptime
         remainingSeconds = duration
         stopTask = Task { [weak self] in
@@ -464,49 +578,130 @@ enum ExperimentalListeningProgram: String, CaseIterable {
 /// A completely local sequence definition. Each stage holds its stimulus
 /// difference until its final transition window, glides to the next stage
 /// without phase reset, and never reaches into video or external-app output.
-struct PsychoacousticProgramStage: Equatable {
-    var durationMinutes: Int
+/// Pitch choices concern the audible carrier, not the binaural difference.
+/// A4=440Hz is 12-TET; natural below is *one explicit* C-based 5-limit
+/// just-intonation table with A4=440 (C4=264Hz), not a universal tuning.
+enum CarrierPitchTuning: String, CaseIterable, Codable {
+    case manualHz
+    case equalA440
+    case naturalFiveLimitC
+
+    var label: String {
+        switch self {
+        case .manualHz: return "Custom Hz"
+        case .equalA440: return "Notes · A4 = 440 Hz (12-TET)"
+        case .naturalFiveLimitC: return "Notes · natural 5-limit (C root)"
+        }
+    }
+
+    static let noteNames = [
+        "C / B♯", "C♯ / D♭", "D", "D♯ / E♭", "E / F♭", "F / E♯",
+        "F♯ / G♭", "G", "G♯ / A♭", "A", "A♯ / B♭", "B / C♭"
+    ]
+    private static let justRatios: [Double] = [
+        1, 16.0/15, 9.0/8, 6.0/5, 5.0/4, 4.0/3,
+        45.0/32, 3.0/2, 8.0/5, 5.0/3, 9.0/5, 15.0/8
+    ]
+
+    func frequency(noteClass: Int, octave: Int) -> Double? {
+        guard (0..<12).contains(noteClass), (0...8).contains(octave) else { return nil }
+        switch self {
+        case .manualHz: return nil
+        case .equalA440:
+            let semitones = 12 * (octave - 4) + noteClass - 9
+            return 440 * pow(2, Double(semitones) / 12)
+        case .naturalFiveLimitC:
+            return 264 * Self.justRatios[noteClass] * pow(2, Double(octave - 4))
+        }
+    }
+}
+
+/// User-authored acoustic sequence. No arbitrary count cap. A UUID prevents
+/// edited/removed rows from accidentally mutating their neighbors.
+struct PsychoacousticProgramStage: Codable, Equatable, Identifiable {
+    var id: UUID = UUID()
+    var durationSeconds: Int
     var beatHz: Double
+    var carrierHz: Double
+    var tuning: CarrierPitchTuning = .manualHz
+    var noteClass: Int = 9
+    var octave: Int = 3
+
+    init(durationMinutes: Int, beatHz: Double, carrierHz: Double = 240) {
+        durationSeconds = durationMinutes * 60
+        self.beatHz = beatHz
+        self.carrierHz = carrierHz
+    }
+
+    var durationMinutes: Int {
+        get { durationSeconds / 60 }
+        set { durationSeconds = newValue * 60 }
+    }
 }
 
 struct PsychoacousticStageTimeline {
     let stages: [PsychoacousticProgramStage]
     let transitionSeconds: Double = 10
 
-    var isValid: Bool {
-        (1...6).contains(stages.count)
-        && stages.allSatisfy {
-            (1...10).contains($0.durationMinutes)
-            && $0.beatHz.isFinite && (1...40).contains($0.beatHz)
+    /// Computed safely; impossible/overflowing plans are rejected.
+    var durationSeconds: Int? {
+        guard !stages.isEmpty else { return nil }
+        var total = 0
+        for stage in stages {
+            guard stage.durationSeconds >= 10, stage.beatHz.isFinite,
+                  (1...40).contains(stage.beatHz),
+                  stage.carrierHz.isFinite, (100...800).contains(stage.carrierHz),
+                  stage.carrierHz + stage.beatHz <= 840,
+                  (0..<12).contains(stage.noteClass), (0...8).contains(stage.octave) else {
+                return nil
+            }
+            let (sum, overflow) = total.addingReportingOverflow(stage.durationSeconds)
+            guard !overflow else { return nil }
+            total = sum
         }
-        && stages.reduce(0) { $0 + $1.durationMinutes } <= 30
+        return total
     }
 
-    var totalSeconds: TimeInterval {
-        stages.reduce(0) { $0 + TimeInterval($1.durationMinutes) * 60 }
+    var isValid: Bool { durationSeconds != nil }
+    var totalSeconds: TimeInterval { TimeInterval(durationSeconds ?? 0) }
+
+    /// Redistribute a user-selected duration as evenly as whole seconds
+    /// allow. Remainder goes to the earliest stages deterministically.
+    func distributedEvenly(over seconds: Int) -> [PsychoacousticProgramStage]? {
+        guard isValid, seconds > 0, seconds / stages.count >= 10 else { return nil }
+        let perStage = seconds / stages.count
+        let remainder = seconds % stages.count
+        return stages.enumerated().map { index, original in
+            var stage = original
+            stage.durationSeconds = perStage + (index < remainder ? 1 : 0)
+            return stage
+        }
     }
 
     func carriers(elapsed: TimeInterval) -> (left: Double, right: Double, beat: Double)? {
-        guard isValid, elapsed.isFinite else { return nil }
-        let clamped = min(max(0, elapsed), totalSeconds)
-        var offset: TimeInterval = 0
+        guard let durationSeconds, elapsed.isFinite else { return nil }
+        let clamped = min(max(0, elapsed), Double(durationSeconds))
+        var offset = 0.0
         for index in stages.indices {
             let stage = stages[index]
-            let stageEnd = offset + TimeInterval(stage.durationMinutes) * 60
-            if clamped < stageEnd || index == stages.count - 1 {
-                var difference = stage.beatHz
+            let end = offset + Double(stage.durationSeconds)
+            if clamped < end || index == stages.count - 1 {
+                var left = stage.carrierHz
+                var beat = stage.beatHz
                 if index + 1 < stages.count {
-                    let rampStart = stageEnd - transitionSeconds
+                    let rampLength = min(transitionSeconds, Double(stage.durationSeconds) / 2)
+                    let rampStart = end - rampLength
                     if clamped >= rampStart {
-                        let u = min(1, max(0, (clamped - rampStart) / transitionSeconds))
+                        let u = min(1, max(0, (clamped - rampStart) / rampLength))
                         let smooth = u * u * (3 - 2 * u)
-                        difference += (stages[index + 1].beatHz - difference) * smooth
+                        let next = stages[index + 1]
+                        left += (next.carrierHz - left) * smooth
+                        beat += (next.beatHz - beat) * smooth
                     }
                 }
-                // Fixed right carrier, left carrier varies 210...249 Hz.
-                return (250 - difference, 250, difference)
+                return (left, left + beat, beat)
             }
-            offset = stageEnd
+            offset = end
         }
         return nil
     }

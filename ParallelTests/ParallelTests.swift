@@ -698,6 +698,79 @@ final class ParallelTests: XCTestCase {
         }
     }
 
+    func testMusicalCarrierTuning440AndNaturalAreExplicit() {
+        XCTAssertEqual(CarrierPitchTuning.equalA440.frequency(noteClass: 9, octave: 4)!, 440,
+                       accuracy: 0.000001)
+        XCTAssertEqual(CarrierPitchTuning.equalA440.frequency(noteClass: 0, octave: 4)!, 261.625565,
+                       accuracy: 0.00001)
+        XCTAssertEqual(CarrierPitchTuning.naturalFiveLimitC.frequency(noteClass: 9, octave: 4)!, 440,
+                       accuracy: 0.000001)
+        XCTAssertEqual(CarrierPitchTuning.naturalFiveLimitC.frequency(noteClass: 0, octave: 4)!, 264,
+                       accuracy: 0.000001)
+        XCTAssertEqual(CarrierPitchTuning.naturalFiveLimitC.frequency(noteClass: 4, octave: 4)!, 330,
+                       accuracy: 0.000001)
+        XCTAssertEqual(CarrierPitchTuning.noteNames[0], "C / B♯")
+        XCTAssertEqual(CarrierPitchTuning.noteNames[8], "G♯ / A♭")
+        XCTAssertNil(CarrierPitchTuning.equalA440.frequency(noteClass: -1, octave: 4))
+        XCTAssertNil(CarrierPitchTuning.manualHz.frequency(noteClass: 9, octave: 4))
+    }
+
+    func testStageTimelineSupportsAnyPracticalStageCountAndHourLongDurations() {
+        let stages = (0..<101).map { index in
+            PsychoacousticProgramStage(durationMinutes: 1, beatHz: Double(index % 20 + 2),
+                                       carrierHz: 220 + Double(index % 5) * 30)
+        }
+        let timeline = PsychoacousticStageTimeline(stages: stages)
+        XCTAssertTrue(timeline.isValid)
+        XCTAssertEqual(timeline.durationSeconds, 6_060)
+        XCTAssertEqual(timeline.carriers(elapsed: 6059)!.beat, 2, accuracy: 0.000001)
+        let distributed = timeline.distributedEvenly(over: 7_374)!
+        XCTAssertEqual(distributed.count, 101)
+        XCTAssertEqual(distributed.reduce(0) { $0 + $1.durationSeconds }, 7_374)
+        XCTAssertEqual(distributed[0].durationSeconds, 74)
+        XCTAssertEqual(distributed[99].durationSeconds, 73)
+        XCTAssertTrue(PsychoacousticStageTimeline(stages: distributed).isValid)
+        XCTAssertNil(timeline.distributedEvenly(over: 100))
+        XCTAssertFalse(PsychoacousticStageTimeline(stages: []).isValid)
+    }
+
+    func testStageTimelineGlidesBothCarrierAndDifferenceWithoutDiscontinuity() {
+        let first = PsychoacousticProgramStage(durationMinutes: 1, beatHz: 6, carrierHz: 440)
+        let next = PsychoacousticProgramStage(durationMinutes: 1, beatHz: 10, carrierHz: 350)
+        let timeline = PsychoacousticStageTimeline(stages: [first, next])
+        XCTAssertTrue(timeline.isValid)
+        let before = timeline.carriers(elapsed: 50)!
+        let middle = timeline.carriers(elapsed: 55)!
+        let after = timeline.carriers(elapsed: 60)!
+        XCTAssertEqual(before.left, 440, accuracy: 0.00001)
+        XCTAssertEqual(before.beat, 6, accuracy: 0.00001)
+        XCTAssertEqual(middle.left, 395, accuracy: 0.00001)
+        XCTAssertEqual(middle.beat, 8, accuracy: 0.00001)
+        XCTAssertEqual(middle.right, 403, accuracy: 0.00001)
+        XCTAssertEqual(after.left, 350, accuracy: 0.00001)
+        XCTAssertEqual(after.beat, 10, accuracy: 0.00001)
+        let a = timeline.carriers(elapsed: 59.999)!
+        let b = timeline.carriers(elapsed: 60)!
+        XCTAssertLessThan(abs(a.left - b.left), 0.001)
+        XCTAssertLessThan(abs(a.beat - b.beat), 0.001)
+    }
+
+    func testStageTimelineRejectsUnsafeAndOverflowingPlans() {
+        var bad = PsychoacousticProgramStage(durationMinutes: 1, beatHz: 6, carrierHz: 440)
+        bad.durationSeconds = 9
+        XCTAssertFalse(PsychoacousticStageTimeline(stages: [bad]).isValid)
+        bad.durationSeconds = 60
+        bad.carrierHz = 900
+        XCTAssertFalse(PsychoacousticStageTimeline(stages: [bad]).isValid)
+        bad.carrierHz = 800
+        bad.beatHz = 41
+        XCTAssertFalse(PsychoacousticStageTimeline(stages: [bad]).isValid)
+        let enormous = PsychoacousticProgramStage(durationMinutes: 1, beatHz: 6, carrierHz: 440)
+        var one = enormous
+        one.durationSeconds = Int.max - 15
+        XCTAssertFalse(PsychoacousticStageTimeline(stages: [one, enormous]).isValid)
+    }
+
     func testEditableStageTimelineTransitionsAndValidation() {
         let stages = [
             PsychoacousticProgramStage(durationMinutes: 1, beatHz: 10),
