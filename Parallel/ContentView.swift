@@ -212,6 +212,7 @@ struct ContentView: View {
                     .onChange(of: psychoacoustic.sessionMinutes) { _ in
                         psychoacoustic.applySessionTimer()
                     }
+                    .disabled(psychoacoustic.selectedProgram != nil)
                     Picker("End fade", selection: $psychoacoustic.fadeDurationSeconds) {
                         Text("5 seconds").tag(5)
                         Text("10 seconds").tag(10)
@@ -311,6 +312,36 @@ struct ContentView: View {
                             }
                             if let program = psychoacoustic.selectedProgram {
                                 LabeledContent("Selected", value: program.label)
+                                if program == .threeStageArc {
+                                    LabeledContent("Total duration",
+                                        value: "\(psychoacoustic.sessionMinutes) minutes")
+                                    ForEach(0..<3, id: \.self) { index in
+                                        let stage = psychoacoustic.editableStages[index]
+                                        VStack(alignment: .leading, spacing: 5) {
+                                            Text("Stage \(index + 1)").font(.headline)
+                                            Stepper(
+                                                "Duration · \(stage.durationMinutes) min",
+                                                value: Binding(
+                                                    get: { psychoacoustic.editableStages[index].durationMinutes },
+                                                    set: { psychoacoustic.updateProgramStage(
+                                                        index: index, durationMinutes: $0) }
+                                                ), in: 1...10
+                                            )
+                                            Stepper(
+                                                "Stereo difference · \(Int(stage.beatHz)) Hz",
+                                                value: Binding(
+                                                    get: { Int(psychoacoustic.editableStages[index].beatHz) },
+                                                    set: { psychoacoustic.updateProgramStage(
+                                                        index: index, beatHz: Double($0)) }
+                                                ), in: 1...40
+                                            )
+                                        }
+                                        .disabled(psychoacoustic.isPlaying)
+                                    }
+                                    Text("Last 10 seconds of stages 1 and 2 glide to the next programmed difference. Stages are acoustic stimuli, not measured mental states.")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                                 if let beat = psychoacoustic.programCurrentBeatHz {
                                     LabeledContent("Current stimulus difference",
                                         value: String(format: "%.1f Hz", beat))

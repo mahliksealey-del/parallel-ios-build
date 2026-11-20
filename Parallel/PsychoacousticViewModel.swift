@@ -18,6 +18,11 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
     @Published var fadeDurationSeconds = 10
     @Published private(set) var selectedProgram: ExperimentalListeningProgram?
     @Published private(set) var programCurrentBeatHz: Double?
+    @Published private(set) var editableStages = [
+        PsychoacousticProgramStage(durationMinutes: 2, beatHz: 10),
+        PsychoacousticProgramStage(durationMinutes: 2, beatHz: 8),
+        PsychoacousticProgramStage(durationMinutes: 1, beatHz: 6)
+    ]
     @Published private(set) var isPlaying = false
     @Published private(set) var remainingSeconds: TimeInterval?
     @Published private(set) var fadeRemainingSeconds: TimeInterval?
@@ -142,9 +147,14 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
     func applySessionTimer() {
         // A custom duration deliberately exits the fixed 5-minute acoustic
         // comparison rather than claiming the source study used other timing.
-        if selectedProgram != nil && sessionMinutes != 5 {
-            selectedProgram = nil
-            programCurrentBeatHz = nil
+        if let program = selectedProgram {
+            let expectedMinutes = program == .threeStageArc
+                ? editableStages.reduce(0) { $0 + $1.durationMinutes }
+                : 5
+            if sessionMinutes != expectedMinutes {
+                selectedProgram = nil
+                programCurrentBeatHz = nil
+            }
         }
         if isPlaying { scheduleStopIfNeeded() }
     }
@@ -159,6 +169,20 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
         // envelope length changes. No restart or surprise auto-play.
     }
 
+    func updateProgramStage(index: Int, durationMinutes: Int? = nil, beatHz: Double? = nil) {
+        guard !isPlaying, editableStages.indices.contains(index) else { return }
+        var revised = editableStages
+        if let durationMinutes { revised[index].durationMinutes = durationMinutes }
+        if let beatHz { revised[index].beatHz = beatHz }
+        guard PsychoacousticStageTimeline(stages: revised).isValid else { return }
+        editableStages = revised
+        if selectedProgram == .threeStageArc {
+            sessionMinutes = revised.reduce(0) { $0 + $1.durationMinutes }
+            self.beatHz = revised[0].beatHz
+            carrierHz = 250 - revised[0].beatHz
+        }
+    }
+
     func chooseExperimentalProgram(_ program: ExperimentalListeningProgram?) {
         guard !isPlaying else {
             errorMessage = "Stop generated audio before changing listening programs."
@@ -167,14 +191,28 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
         selectedProgram = program
         programCurrentBeatHz = nil
         if let program {
-            sessionMinutes = 5
-            carrierHz = program.initialLeftHz
-            beatHz = program.initialBeatHz
+            if program == .threeStageArc {
+                guard PsychoacousticStageTimeline(stages: editableStages).isValid else {
+                    selectedProgram = nil
+                    errorMessage = "Invalid acoustic stage configuration."
+                    return
+                }
+                sessionMinutes = editableStages.reduce(0) { $0 + $1.durationMinutes }
+                beatHz = editableStages[0].beatHz
+                carrierHz = 250 - beatHz
+            } else {
+                sessionMinutes = 5
+                carrierHz = program.initialLeftHz
+                beatHz = program.initialBeatHz
+            }
             mode = .binaural
             // No extra noise confound in these original comparison scenes.
             whiteNoise = 0
             pinkNoise = 0
             brownNoise = 0
+        } else {
+            // Avoid retaining an unsupported Picker tag from a custom duration.
+            sessionMinutes = 5
         }
         errorMessage = nil
         persist()
@@ -273,7 +311,18 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
                 // Original, deterministic glide uses the renderer's existing
                 // phase-continuous frequency ramp, not restarted oscillators.
                 if let program = self.selectedProgram {
-                    let settings = program.carriers(progress: elapsed / duration)
+                    let settings: (left: Double, right: Double, beat: Double)
+                    if program == .threeStageArc {
+                        let timeline = PsychoacousticStageTimeline(stages: self.editableStages)
+                        guard let stageSettings = timeline.carriers(elapsed: elapsed) else {
+                            self.errorMessage = "Invalid acoustic stage configuration."
+                            self.session?.stopPlayback(for: self.sourceID)
+                            return
+                        }
+                        settings = stageSettings
+                    } else {
+                        settings = program.carriers(progress: elapsed / duration)
+                    }
                     self.programCurrentBeatHz = settings.beat
                     if program != .steadySix && remaining > 0 {
                         guard self.graph.updatePsychoacousticFrequencies(
@@ -358,7 +407,7 @@ enum ExperimentalListeningProgram: String, CaseIterable {
         switch self {
         case .steadySix: return "Steady 6 Hz (5 min)"
         case .tenToSixGlide: return "Original 10 → 6 Hz glide (5 min)"
-        case .threeStageArc: return "Original 10 → 8 → 6 Hz (5 min)"
+        case .threeStageArc: return "Editable three-stage sequence"
         }
     }
 
@@ -408,5 +457,57 @@ enum ExperimentalListeningProgram: String, CaseIterable {
             }
         }
         return (250 - beat, 250, beat)
+    }
+}
+
+
+/// A completely local sequence definition. Each stage holds its stimulus
+/// difference until its final transition window, glides to the next stage
+/// without phase reset, and never reaches into video or external-app output.
+struct PsychoacousticProgramStage: Equatable {
+    var durationMinutes: Int
+    var beatHz: Double
+}
+
+struct PsychoacousticStageTimeline {
+    let stages: [PsychoacousticProgramStage]
+    let transitionSeconds: Double = 10
+
+    var isValid: Bool {
+        (1...6).contains(stages.count)
+        && stages.allSatisfy {
+            (1...10).contains($0.durationMinutes)
+            && $0.beatHz.isFinite && (1...40).contains($0.beatHz)
+        }
+        && stages.reduce(0) { $0 + $1.durationMinutes } <= 30
+    }
+
+    var totalSeconds: TimeInterval {
+        stages.reduce(0) { $0 + TimeInterval($1.durationMinutes) * 60 }
+    }
+
+    func carriers(elapsed: TimeInterval) -> (left: Double, right: Double, beat: Double)? {
+        guard isValid, elapsed.isFinite else { return nil }
+        let clamped = min(max(0, elapsed), totalSeconds)
+        var offset: TimeInterval = 0
+        for index in stages.indices {
+            let stage = stages[index]
+            let stageEnd = offset + TimeInterval(stage.durationMinutes) * 60
+            if clamped < stageEnd || index == stages.count - 1 {
+                var difference = stage.beatHz
+                if index + 1 < stages.count {
+                    let rampStart = stageEnd - transitionSeconds
+                    if clamped >= rampStart {
+                        let u = min(1, max(0, (clamped - rampStart) / transitionSeconds))
+                        let smooth = u * u * (3 - 2 * u)
+                        difference += (stages[index + 1].beatHz - difference) * smooth
+                    }
+                }
+                // Fixed right carrier, left carrier varies 210...249 Hz.
+                return (250 - difference, 250, difference)
+            }
+            offset = stageEnd
+        }
+        return nil
     }
 }

@@ -698,6 +698,34 @@ final class ParallelTests: XCTestCase {
         }
     }
 
+    func testEditableStageTimelineTransitionsAndValidation() {
+        let stages = [
+            PsychoacousticProgramStage(durationMinutes: 1, beatHz: 10),
+            PsychoacousticProgramStage(durationMinutes: 2, beatHz: 8),
+            PsychoacousticProgramStage(durationMinutes: 1, beatHz: 6)
+        ]
+        let timeline = PsychoacousticStageTimeline(stages: stages)
+        XCTAssertTrue(timeline.isValid)
+        XCTAssertEqual(timeline.totalSeconds, 240)
+        XCTAssertEqual(timeline.carriers(elapsed: 0)!.beat, 10, accuracy: 0.000001)
+        XCTAssertEqual(timeline.carriers(elapsed: 50)!.beat, 10, accuracy: 0.000001)
+        XCTAssertEqual(timeline.carriers(elapsed: 55)!.beat, 9, accuracy: 0.000001)
+        XCTAssertEqual(timeline.carriers(elapsed: 60)!.beat, 8, accuracy: 0.000001)
+        XCTAssertEqual(timeline.carriers(elapsed: 175)!.beat, 7, accuracy: 0.000001)
+        XCTAssertEqual(timeline.carriers(elapsed: 240)!.beat, 6, accuracy: 0.000001)
+        XCTAssertNil(timeline.carriers(elapsed: .nan))
+        XCTAssertFalse(PsychoacousticStageTimeline(stages: []).isValid)
+        XCTAssertFalse(PsychoacousticStageTimeline(stages: [
+            PsychoacousticProgramStage(durationMinutes: 2, beatHz: 50)
+        ]).isValid)
+        var prior = 10.0
+        for sample in 0...2400 {
+            let current = timeline.carriers(elapsed: Double(sample)/10)!.beat
+            XCTAssertLessThanOrEqual(current, prior + 0.0000001)
+            prior = current
+        }
+    }
+
     func testThreeStageTimelineFrequencyAndSmoothBoundaries() {
         let arc = ExperimentalListeningProgram.threeStageArc
         XCTAssertEqual(arc.carriers(progress: 0).beat, 10, accuracy: 0.0001)
