@@ -24,6 +24,7 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
         PsychoacousticProgramStage(durationMinutes: 1, beatHz: 6, carrierHz: 244)
     ]
     @Published private(set) var customSessionSeconds: Int?
+    @Published private(set) var savedSequences: [SavedPsychoacousticSequence] = []
     @Published private(set) var isPlaying = false
     @Published private(set) var remainingSeconds: TimeInterval?
     @Published private(set) var fadeRemainingSeconds: TimeInterval?
@@ -69,6 +70,14 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
            let saved = try? JSONDecoder().decode([PsychoacousticProgramStage].self, from: data),
            PsychoacousticStageTimeline(stages: saved).isValid {
             editableStages = saved
+        }
+        if let savedData = defaults.data(forKey: "psycho.sequenceLibrary.v1"),
+           let decoded = try? JSONDecoder().decode(
+                [SavedPsychoacousticSequence].self, from: savedData) {
+            savedSequences = decoded.filter {
+                !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+                PsychoacousticStageTimeline(stages: $0.stages).isValid
+            }
         }
         if let seconds = defaults.object(forKey: "psycho.customDuration.v2") as? Int,
            seconds >= 10 {
@@ -324,6 +333,49 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
         guard selectedProgram == .threeStageArc, let first = editableStages.first else { return }
         carrierHz = first.carrierHz
         beatHz = first.beatHz
+    }
+
+    /// Saves user-authored sequences separately from published reference programs.
+    /// No app-imposed number of sequences; device storage is finite.
+    func saveCustomSequence(name: String) {
+        guard !isPlaying, selectedProgram == .threeStageArc else {
+            errorMessage = "Select Editable sequence and stop audio before saving."
+            return
+        }
+        let trimmed = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
+        guard !trimmed.isEmpty,
+              PsychoacousticStageTimeline(stages: editableStages).isValid else {
+            errorMessage = "Name the sequence and check its stage settings."
+            return
+        }
+        savedSequences.append(SavedPsychoacousticSequence(
+            id: UUID(), name: trimmed, stages: editableStages))
+        persistSequenceLibrary()
+        errorMessage = nil
+    }
+
+    func loadCustomSequence(id: UUID) {
+        guard !isPlaying, let saved = savedSequences.first(where: { $0.id == id }),
+              PsychoacousticStageTimeline(stages: saved.stages).isValid else { return }
+        editableStages = saved.stages
+        selectedProgram = .threeStageArc
+        customSessionSeconds = nil
+        mode = .binaural
+        syncFirstStageIfSelected()
+        persistEditableStages()
+        errorMessage = nil
+    }
+
+    func deleteCustomSequence(id: UUID) {
+        guard !isPlaying else { return }
+        savedSequences.removeAll { $0.id == id }
+        persistSequenceLibrary()
+    }
+
+    private func persistSequenceLibrary() {
+        if let data = try? JSONEncoder().encode(savedSequences) {
+            UserDefaults.standard.set(data, forKey: "psycho.sequenceLibrary.v1")
+        }
     }
 
     private func persistEditableStages() {
@@ -705,4 +757,10 @@ struct PsychoacousticStageTimeline {
         }
         return nil
     }
+}
+
+struct SavedPsychoacousticSequence: Codable, Identifiable {
+    let id: UUID
+    let name: String
+    let stages: [PsychoacousticProgramStage]
 }

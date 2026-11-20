@@ -698,6 +698,24 @@ final class ParallelTests: XCTestCase {
         }
     }
 
+    func testNamedSequenceLibraryRoundTripsStageIDsAndPitchTuning() throws {
+        var stage = PsychoacousticProgramStage(durationMinutes: 7, beatHz: 6.5, carrierHz: 440)
+        stage.tuning = .equalA440
+        stage.noteClass = 9
+        stage.octave = 4
+        let sequence = SavedPsychoacousticSequence(
+            id: UUID(), name: "Original hour session", stages: [stage]
+        )
+        let data = try JSONEncoder().encode([sequence])
+        let restored = try JSONDecoder().decode([SavedPsychoacousticSequence].self, from: data)
+        XCTAssertEqual(restored.count, 1)
+        XCTAssertEqual(restored[0].id, sequence.id)
+        XCTAssertEqual(restored[0].stages[0].id, stage.id)
+        XCTAssertEqual(restored[0].stages[0].tuning, .equalA440)
+        XCTAssertEqual(restored[0].stages[0].beatHz, 6.5, accuracy: 0.000001)
+        XCTAssertEqual(restored[0].name, sequence.name)
+    }
+
     func testMusicalCarrierTuning440AndNaturalAreExplicit() {
         XCTAssertEqual(CarrierPitchTuning.equalA440.frequency(noteClass: 9, octave: 4)!, 440,
                        accuracy: 0.000001)

@@ -56,16 +56,23 @@ struct ContentView: View {
                 }
 
                 Section {
-                    Button {
-                        withAnimation { metronomeExpanded.toggle() }
-                    } label: {
-                        HStack {
-                            Label("Metronome", systemImage: "metronome")
-                            Spacer()
-                            Image(systemName: metronomeExpanded ? "chevron.up" : "chevron.down")
+                    HStack {
+                        Button {
+                            withAnimation { metronomeExpanded.toggle() }
+                        } label: {
+                            HStack {
+                                Label("Metronome", systemImage: "metronome")
+                                Image(systemName: metronomeExpanded ? "chevron.up" : "chevron.down")
+                            }
                         }
+                        .accessibilityIdentifier("metronome-accordion")
+                        Spacer()
+                        Button(model.isPlaying ? "Stop" : "Play") {
+                            model.togglePlayback()
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("metronome-quick-transport")
                     }
-                    .accessibilityIdentifier("metronome-accordion")
                 }
                 if metronomeExpanded {
                 Section("Tempo") {
@@ -429,6 +436,7 @@ private struct PsychoacousticProgramEditor: View {
     @State private var minutes = "0"
     @State private var seconds = "0"
     @State private var durationError: String?
+    @State private var sequenceName = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -469,9 +477,40 @@ private struct PsychoacousticProgramEditor: View {
                 }
                 .disabled(psychoacoustic.isPlaying)
                 .accessibilityIdentifier("listening-stage-add")
+                HStack {
+                    TextField("Name this sequence", text: $sequenceName)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Save") {
+                        psychoacoustic.saveCustomSequence(name: sequenceName)
+                        if psychoacoustic.errorMessage == nil { sequenceName = "" }
+                    }
+                    .disabled(psychoacoustic.isPlaying || sequenceName.trimmingCharacters(
+                        in: .whitespacesAndNewlines).isEmpty)
+                }
+                .accessibilityIdentifier("listening-sequence-save")
                 Text("No fixed stage-count or 30-minute limit. Every stage can specify its own carrier and binaural difference. Longer sequences use more device resources.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            if !psychoacoustic.savedSequences.isEmpty {
+                DisclosureGroup("My saved sequences") {
+                    ForEach(psychoacoustic.savedSequences) { saved in
+                        HStack {
+                            Button(saved.name) {
+                                psychoacoustic.loadCustomSequence(id: saved.id)
+                            }
+                            .disabled(psychoacoustic.isPlaying)
+                            Spacer()
+                            Button(role: .destructive) {
+                                psychoacoustic.deleteCustomSequence(id: saved.id)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .disabled(psychoacoustic.isPlaying)
+                            .accessibilityLabel("Delete \(saved.name)")
+                        }
+                    }
+                }
             }
             if psychoacoustic.selectedProgram == .threeStageArc ||
                psychoacoustic.selectedProgram == nil {
