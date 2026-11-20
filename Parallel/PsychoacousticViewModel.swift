@@ -15,6 +15,7 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
     @Published var pinkNoise = 0.0
     @Published var brownNoise = 0.0
     @Published var sessionMinutes = 0
+    @Published var fadeDurationSeconds = 10
     @Published private(set) var selectedProgram: ExperimentalListeningProgram?
     @Published private(set) var programCurrentBeatHz: Double?
     @Published private(set) var isPlaying = false
@@ -57,6 +58,10 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
             whiteNoise = min(0.2, max(0, defaults.double(forKey: "psycho.white")))
             pinkNoise = min(0.2, max(0, defaults.double(forKey: "psycho.pink")))
             brownNoise = min(0.2, max(0, defaults.double(forKey: "psycho.brown")))
+        }
+        let savedFade = defaults.integer(forKey: "psycho.fadeDuration")
+        if [5, 10, 20, 30].contains(savedFade) {
+            fadeDurationSeconds = savedFade
         }
         precondition(coordinator.register(self, for: sourceID),
                      "Psychoacoustic source was already registered.")
@@ -144,6 +149,16 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
         if isPlaying { scheduleStopIfNeeded() }
     }
 
+    func applyFadeDuration() {
+        guard [5, 10, 20, 30].contains(fadeDurationSeconds) else {
+            fadeDurationSeconds = 10
+            return
+        }
+        UserDefaults.standard.set(fadeDurationSeconds, forKey: "psycho.fadeDuration")
+        // The existing uptime deadline remains intact; only the ending
+        // envelope length changes. No restart or surprise auto-play.
+    }
+
     func chooseExperimentalProgram(_ program: ExperimentalListeningProgram?) {
         guard !isPlaying else {
             errorMessage = "Stop generated audio before changing listening programs."
@@ -171,7 +186,9 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
         guard value.isFinite, (0...1).contains(value) else { return }
         mixerLevel = value
         let fade = fadeRemainingSeconds.map {
-            Double(PsychoacousticSessionEnvelope.gain(remaining: $0))
+            Double(PsychoacousticSessionEnvelope.gain(
+                remaining: $0, fadeSeconds: TimeInterval(fadeDurationSeconds)
+            ))
         } ?? 1
         if isPlaying { _ = graph.updatePsychoacousticOutputVolume(value * fade) }
     }
@@ -258,7 +275,7 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
                 if let program = self.selectedProgram {
                     let settings = program.carriers(progress: elapsed / duration)
                     self.programCurrentBeatHz = settings.beat
-                    if program == .tenToSixGlide && remaining > 0 {
+                    if program != .steadySix && remaining > 0 {
                         guard self.graph.updatePsychoacousticFrequencies(
                             left: settings.left, right: settings.right
                         ) else {
@@ -273,10 +290,13 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
                     self.session?.stopPlayback(for: self.sourceID)
                     return
                 }
-                if remaining <= PsychoacousticSessionEnvelope.fadeSeconds {
+                if remaining <= TimeInterval(self.fadeDurationSeconds) {
                     self.fadeRemainingSeconds = remaining
                     _ = self.graph.updatePsychoacousticOutputVolume(
-                        mixerLevel * Double(PsychoacousticSessionEnvelope.gain(remaining: remaining)))
+                        self.mixerLevel * Double(PsychoacousticSessionEnvelope.gain(
+                            remaining: remaining,
+                            fadeSeconds: TimeInterval(self.fadeDurationSeconds)
+                        )))
                 } else {
                     self.fadeRemainingSeconds = nil
                 }
@@ -284,7 +304,7 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
                 // sample-accurate fading and background tails need device tests.
                 do {
                     try await Task.sleep(nanoseconds:
-                        remaining <= PsychoacousticSessionEnvelope.fadeSeconds
+                        remaining <= TimeInterval(self.fadeDurationSeconds)
                         ? 50_000_000 : 250_000_000)
                 } catch {
                     return
@@ -316,8 +336,10 @@ enum PsychoacousticSessionEnvelope {
         max(0, duration - max(0, elapsed))
     }
 
-    static func gain(remaining: TimeInterval) -> Float {
-        let u = 1 - min(1, max(0, remaining / fadeSeconds))
+    static func gain(remaining: TimeInterval, fadeSeconds duration: TimeInterval = 10) -> Float {
+        guard duration.isFinite, duration > 0 else { return 0 }
+        let remaining = remaining.isFinite ? remaining : 0
+        let u = 1 - min(1, max(0, remaining / duration))
         return Float(0.5 * (1 + cos(.pi * u)))
     }
 }
@@ -330,31 +352,61 @@ enum PsychoacousticSessionEnvelope {
 enum ExperimentalListeningProgram: String, CaseIterable {
     case steadySix
     case tenToSixGlide
+    case threeStageArc
 
     var label: String {
         switch self {
         case .steadySix: return "Steady 6 Hz (5 min)"
         case .tenToSixGlide: return "Original 10 → 6 Hz glide (5 min)"
+        case .threeStageArc: return "Original 10 → 8 → 6 Hz (5 min)"
         }
     }
 
     var initialLeftHz: Double {
         switch self {
         case .steadySix: return 244
-        case .tenToSixGlide: return 240
+        case .tenToSixGlide, .threeStageArc: return 240
         }
     }
     var initialBeatHz: Double {
         switch self {
         case .steadySix: return 6
-        case .tenToSixGlide: return 10
+        case .tenToSixGlide, .threeStageArc: return 10
         }
     }
 
     func carriers(progress: Double) -> (left: Double, right: Double, beat: Double) {
         let u = progress.isFinite ? min(1, max(0, progress)) : 0
         let ease = u * u * (3 - 2 * u)
-        let left = self == .steadySix ? 244 : 240 + 4 * ease
-        return (left, 250, 250 - left)
+        let beat: Double
+        switch self {
+        case .steadySix:
+            beat = 6
+        case .tenToSixGlide:
+            beat = 10 - 4 * ease
+        case .threeStageArc:
+            // Stage 1 (0–2m): 10Hz, last 10s glide to 8Hz.
+            // Stage 2 (2–4m): 8Hz, last 10s glide to 6Hz.
+            // Stage 3 (4–5m): 6Hz steady. Clock uses normalized 5m.
+            let boundary1 = 120.0 / 300
+            let boundary2 = 240.0 / 300
+            let transitionLength = 10.0 / 300
+            if u < boundary1 - transitionLength {
+                beat = 10
+            } else if u < boundary1 {
+                let t = (u - (boundary1 - transitionLength)) / transitionLength
+                let smooth = t * t * (3 - 2 * t)
+                beat = 10 - 2 * smooth
+            } else if u < boundary2 - transitionLength {
+                beat = 8
+            } else if u < boundary2 {
+                let t = (u - (boundary2 - transitionLength)) / transitionLength
+                let smooth = t * t * (3 - 2 * t)
+                beat = 8 - 2 * smooth
+            } else {
+                beat = 6
+            }
+        }
+        return (250 - beat, 250, beat)
     }
 }

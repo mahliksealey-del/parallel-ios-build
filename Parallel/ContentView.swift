@@ -212,6 +212,15 @@ struct ContentView: View {
                     .onChange(of: psychoacoustic.sessionMinutes) { _ in
                         psychoacoustic.applySessionTimer()
                     }
+                    Picker("End fade", selection: $psychoacoustic.fadeDurationSeconds) {
+                        Text("5 seconds").tag(5)
+                        Text("10 seconds").tag(10)
+                        Text("20 seconds").tag(20)
+                        Text("30 seconds").tag(30)
+                    }
+                    .onChange(of: psychoacoustic.fadeDurationSeconds) { _ in
+                        psychoacoustic.applyFadeDuration()
+                    }
                     if let remaining = psychoacoustic.remainingSeconds {
                         HStack {
                             Text("Remaining")
@@ -226,7 +235,7 @@ struct ContentView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    Text("Timed sessions fade the generated tone and noise together over the last 10 seconds. Headphone removal and manual Stop remain immediate.")
+                    Text("Timed sessions fade the generated tone and noise together over the selected ending. Headphone removal and manual Stop remain immediate.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

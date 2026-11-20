@@ -679,6 +679,42 @@ final class ParallelTests: XCTestCase {
         )
     }
 
+    func testFadeDurationsAreMonotonicAndKeepExactEndpoints() {
+        for seconds in [5.0, 10.0, 20.0, 30.0] {
+            XCTAssertEqual(PsychoacousticSessionEnvelope.gain(remaining: seconds, fadeSeconds: seconds),
+                1, accuracy: 0.000001)
+            XCTAssertEqual(PsychoacousticSessionEnvelope.gain(remaining: seconds / 2, fadeSeconds: seconds),
+                0.5, accuracy: 0.000001)
+            XCTAssertEqual(PsychoacousticSessionEnvelope.gain(remaining: 0, fadeSeconds: seconds),
+                0, accuracy: 0.000001)
+            var previous = Float(1)
+            for i in 0...100 {
+                let remaining = seconds * (1 - Double(i) / 100)
+                let current = PsychoacousticSessionEnvelope.gain(
+                    remaining: remaining, fadeSeconds: seconds)
+                XCTAssertLessThanOrEqual(current, previous + 0.000001)
+                previous = current
+            }
+        }
+    }
+
+    func testThreeStageTimelineFrequencyAndSmoothBoundaries() {
+        let arc = ExperimentalListeningProgram.threeStageArc
+        XCTAssertEqual(arc.carriers(progress: 0).beat, 10, accuracy: 0.0001)
+        XCTAssertEqual(arc.carriers(progress: 0.2).beat, 10, accuracy: 0.0001)
+        XCTAssertEqual(arc.carriers(progress: 0.4).beat, 8, accuracy: 0.0001)
+        XCTAssertEqual(arc.carriers(progress: 0.6).beat, 8, accuracy: 0.0001)
+        XCTAssertEqual(arc.carriers(progress: 0.8).beat, 6, accuracy: 0.0001)
+        XCTAssertEqual(arc.carriers(progress: 1).beat, 6, accuracy: 0.0001)
+        var previous = 10.0
+        for i in 0...3000 {
+            let setting = arc.carriers(progress: Double(i) / 3000)
+            XCTAssertLessThanOrEqual(setting.beat, previous + 0.000001)
+            XCTAssertEqual(setting.left + setting.beat, setting.right, accuracy: 0.000001)
+            previous = setting.beat
+        }
+    }
+
     func testExperimentalProgramCarriersContinuousAndBounded() {
         let steady = ExperimentalListeningProgram.steadySix
         XCTAssertEqual(steady.carriers(progress: 0).beat, 6)
