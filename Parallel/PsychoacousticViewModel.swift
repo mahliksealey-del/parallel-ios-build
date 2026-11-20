@@ -573,7 +573,7 @@ enum ExperimentalListeningProgram: String, CaseIterable {
         switch self {
         case .steadySix: return "Steady 6 Hz (5 min)"
         case .tenToSixGlide: return "Original 10 → 6 Hz glide (5 min)"
-        case .threeStageArc: return "Editable three-stage sequence"
+        case .threeStageArc: return "Editable custom sequence"
         }
     }
 
