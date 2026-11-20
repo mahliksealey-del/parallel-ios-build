@@ -16,6 +16,11 @@ struct ContentView: View {
     @State private var isDraggingCarrier = false
     @State private var isDraggingBeat = false
     @State private var isDraggingPsychoGain = false
+    // First-party channel trim is independent of the original per-source controls.
+    @State private var showingMiniMixer = false
+    @State private var channelTrims: [Double] = Array(repeating: 1, count: 5)
+    @State private var mutedChannels: Set<Int> = []
+    @State private var soloChannels: Set<Int> = []
 
     var body: some View {
         NavigationStack {
@@ -34,6 +39,18 @@ struct ContentView: View {
                         }
                     }
                     .frame(maxWidth: .infinity)
+                }
+
+                Section {
+                    Button {
+                        showingMiniMixer = true
+                    } label: {
+                        Label("Mini Mixer", systemImage: "slider.horizontal.3")
+                    }
+                    .accessibilityIdentifier("parallel-mini-mixer")
+                    Text("Optional five-source controls. The original video wall stays unchanged.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Tempo") {
@@ -102,6 +119,7 @@ struct ContentView: View {
                         if !editing { psychoacoustic.applyFrequencies() }
                     })
                     .accessibilityLabel("Left carrier frequency")
+                    .disabled(psychoacoustic.selectedProgram != nil)
                     .onChange(of: psychoacoustic.carrierHz) { _ in
                         if !isDraggingCarrier { psychoacoustic.applyFrequencies() }
                     }
@@ -114,6 +132,7 @@ struct ContentView: View {
                         if !editing { psychoacoustic.applyFrequencies() }
                     })
                     .accessibilityLabel("Binaural frequency difference")
+                    .disabled(psychoacoustic.selectedProgram != nil)
                     .onChange(of: psychoacoustic.beatHz) { _ in
                         if !isDraggingBeat { psychoacoustic.applyFrequencies() }
                     }
@@ -129,6 +148,7 @@ struct ContentView: View {
                         Text("Isochronic · pulsed tone").tag(PsychoacousticMode.isochronic)
                     }
                     .onChange(of: psychoacoustic.mode) { _ in psychoacoustic.applyLayers() }
+                    .disabled(psychoacoustic.selectedProgram != nil)
                     Text(psychoacoustic.mode == .binaural
                          ? "Each ear receives a different carrier; stereo headphones are required."
                          : psychoacoustic.mode == .monaural
@@ -225,7 +245,113 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("Parallel")
+            .sheet(isPresented: $showingMiniMixer) {
+                NavigationStack {
+                    Form {
+                        Section("Parallel-owned audio") {
+                            ForEach(0..<5, id: \.self) { index in
+                                VStack(alignment: .leading, spacing: 7) {
+                                    HStack {
+                                        Text(Self.channelName(index)).font(.headline)
+                                        Spacer()
+                                        Button(mutedChannels.contains(index) ? "Unmute" : "Mute") {
+                                            if mutedChannels.contains(index) {
+                                                mutedChannels.remove(index)
+                                            } else {
+                                                mutedChannels.insert(index)
+                                            }
+                                            applyMiniMixer()
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .accessibilityIdentifier("mixer-mute-\(index)")
+                                        Button(soloChannels.contains(index) ? "Unsolo" : "Solo") {
+                                            if soloChannels.contains(index) {
+                                                soloChannels.remove(index)
+                                            } else {
+                                                soloChannels.insert(index)
+                                            }
+                                            applyMiniMixer()
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .accessibilityIdentifier("mixer-solo-\(index)")
+                                    }
+                                    Slider(value: Binding(
+                                        get: { channelTrims[index] },
+                                        set: { value in
+                                            channelTrims[index] = value
+                                            applyMiniMixer()
+                                        }
+                                    ), in: 0...1)
+                                        .accessibilityLabel("\(Self.channelName(index)) trim")
+                                        .accessibilityIdentifier("mixer-trim-\(index)")
+                                    Text("Trim \(Int(channelTrims[index] * 100))%")
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        Section("Experimental listening programs") {
+                            Text("Specified acoustic sequences, not validated brain-state changes, treatment or performance enhancement. Stereo headphones are required.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                            ForEach(ExperimentalListeningProgram.allCases, id: \.self) { program in
+                                Button(program.label) {
+                                    psychoacoustic.chooseExperimentalProgram(program)
+                                }
+                                .disabled(psychoacoustic.isPlaying)
+                            }
+                            if let program = psychoacoustic.selectedProgram {
+                                LabeledContent("Selected", value: program.label)
+                                if let beat = psychoacoustic.programCurrentBeatHz {
+                                    LabeledContent("Current stimulus difference",
+                                        value: String(format: "%.1f Hz", beat))
+                                }
+                                Button("Clear program") {
+                                    psychoacoustic.chooseExperimentalProgram(nil)
+                                }
+                                .disabled(psychoacoustic.isPlaying)
+                            }
+                            Link("Read scientific context", destination:
+                                URL(string: "https://doi.org/10.1371/journal.pone.0335580")!)
+                        }
+                        Section {
+                            Text("These controls affect only Parallel's three videos, metronome and generated stereo psychoacoustics. No third-party app volume or unmeasured master level is represented.")
+                                .font(.footnote)
+                        }
+                    }
+                    .navigationTitle("Mini Mixer")
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showingMiniMixer = false }
+                        }
+                    }
+                    .onAppear(perform: applyMiniMixer)
+                }
+            }
         }
+    }
+
+    private static func channelName(_ index: Int) -> String {
+        switch index {
+        case 0: return "Video 1"
+        case 1: return "Video 2"
+        case 2: return "Video 3"
+        case 3: return "Metronome"
+        default: return "Psychoacoustic (tone + noise)"
+        }
+    }
+
+    private func applyMiniMixer() {
+        let levels = MiniMixerRouting.outputLevels(
+            trims: channelTrims, muted: mutedChannels, solo: soloChannels
+        )
+        for index in 0..<3 {
+            videos[index].mixerLevel = levels[index]
+            videos[index].applyVolume()
+        }
+        model.mixerLevel = levels[3]
+        model.applyGain()
+        psychoacoustic.setMixerLevel(levels[4])
     }
 
     private static func formatCountdown(_ seconds: TimeInterval) -> String {
@@ -238,6 +364,19 @@ struct ContentView: View {
             LabeledContent(title, value: "\(Int(value.wrappedValue * 100))%")
             Slider(value: value, in: 0...0.2)
                 .accessibilityLabel(title)
+                .disabled(psychoacoustic.selectedProgram != nil)
+        }
+    }
+}
+
+/// Pure first-party mixer state reducer, independent of AVPlayer/AVAudioEngine.
+enum MiniMixerRouting {
+    static func outputLevels(trims: [Double], muted: Set<Int>, solo: Set<Int>) -> [Double] {
+        guard trims.count == 5 else { return Array(repeating: 0, count: 5) }
+        return trims.enumerated().map { index, trim in
+            guard trim.isFinite, (0...1).contains(trim) else { return 0 }
+            return muted.contains(index) || (!solo.isEmpty && !solo.contains(index))
+                ? 0 : trim
         }
     }
 }
@@ -360,7 +499,7 @@ private struct MediaSlotCard: View {
                     Task { @MainActor in await media.applyAudioBoost() }
                 }
                 .accessibilityIdentifier("media-boost-\(media.slot + 1)")
-            Text("Optional decoded-audio gain with a 0.98 digital peak limiter. Default is bypassed.")
+            Text("Optional linked-channel dynamics with conservative sample-peak guard. Not a calibrated true-peak limiter. Default is bypassed.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             Text(media.fileName)

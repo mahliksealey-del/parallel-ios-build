@@ -15,6 +15,8 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
     @Published var pinkNoise = 0.0
     @Published var brownNoise = 0.0
     @Published var sessionMinutes = 0
+    @Published private(set) var selectedProgram: ExperimentalListeningProgram?
+    @Published private(set) var programCurrentBeatHz: Double?
     @Published private(set) var isPlaying = false
     @Published private(set) var remainingSeconds: TimeInterval?
     @Published private(set) var fadeRemainingSeconds: TimeInterval?
@@ -33,12 +35,13 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
         }
     }
 
-    var bandLabel: String { Self.bandLabel(for: beatHz) }
+    var bandLabel: String { Self.bandLabel(for: programCurrentBeatHz ?? beatHz) }
 
     private weak var session: AudioSessionCoordinator?
     private let graph: AudioGraphCoordinator
     private let sourceID = AudioSourceID.psychoacoustic
     private var stopTask: Task<Void, Never>?
+    private var mixerLevel = 1.0
 
     init(graph: AudioGraphCoordinator, coordinator: AudioSessionCoordinator) {
         self.graph = graph
@@ -74,6 +77,8 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
     }
 
     func applyFrequencies() {
+        // Program selection updates displayed carrier values; only the explicit
+        // Clear Program or a preset change disengages the selected sequence.
         guard parametersAreValid else {
             errorMessage = PsychoacousticAudioError.invalidParameters.localizedDescription
             return
@@ -117,6 +122,8 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
     }
 
     func applyPreset(_ preset: Preset) {
+        selectedProgram = nil
+        programCurrentBeatHz = nil
         switch preset {
         case .focus: carrierHz = 220; beatHz = 14; mode = .binaural; pinkNoise = 0.04
         case .calm: carrierHz = 180; beatHz = 8; mode = .monaural; pinkNoise = 0.08
@@ -128,7 +135,45 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
     }
 
     func applySessionTimer() {
+        // A custom duration deliberately exits the fixed 5-minute acoustic
+        // comparison rather than claiming the source study used other timing.
+        if selectedProgram != nil && sessionMinutes != 5 {
+            selectedProgram = nil
+            programCurrentBeatHz = nil
+        }
         if isPlaying { scheduleStopIfNeeded() }
+    }
+
+    func chooseExperimentalProgram(_ program: ExperimentalListeningProgram?) {
+        guard !isPlaying else {
+            errorMessage = "Stop generated audio before changing listening programs."
+            return
+        }
+        selectedProgram = program
+        programCurrentBeatHz = nil
+        if let program {
+            sessionMinutes = 5
+            carrierHz = program.initialLeftHz
+            beatHz = program.initialBeatHz
+            mode = .binaural
+            // No extra noise confound in these original comparison scenes.
+            whiteNoise = 0
+            pinkNoise = 0
+            brownNoise = 0
+        }
+        errorMessage = nil
+        persist()
+    }
+
+    /// Controls the composite stereo-generated bus, preserving the internal
+    /// tone + three noise layers and combining with the session end envelope.
+    func setMixerLevel(_ value: Double) {
+        guard value.isFinite, (0...1).contains(value) else { return }
+        mixerLevel = value
+        let fade = fadeRemainingSeconds.map {
+            Double(PsychoacousticSessionEnvelope.gain(remaining: $0))
+        } ?? 1
+        if isPlaying { _ = graph.updatePsychoacousticOutputVolume(value * fade) }
     }
 
     func reportError(_ message: String) {
@@ -185,12 +230,13 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
         stopTask = nil
         remainingSeconds = nil
         fadeRemainingSeconds = nil
+        programCurrentBeatHz = nil
     }
 
     private func scheduleStopIfNeeded() {
         cancelSessionClock()
         // The psycho source owns this node. Do not affect the metronome/video paths.
-        _ = graph.updatePsychoacousticOutputVolume(1)
+        _ = graph.updatePsychoacousticOutputVolume(mixerLevel)
         guard isPlaying, sessionMinutes > 0 else { return }
 
         // Monotonic deadline avoids cumulative Task.sleep drift and re-syncs
@@ -207,6 +253,21 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
                 let remaining = PsychoacousticSessionEnvelope.remaining(
                     elapsed: elapsed, duration: duration)
                 self.remainingSeconds = remaining
+                // Original, deterministic glide uses the renderer's existing
+                // phase-continuous frequency ramp, not restarted oscillators.
+                if let program = self.selectedProgram {
+                    let settings = program.carriers(progress: elapsed / duration)
+                    self.programCurrentBeatHz = settings.beat
+                    if program == .tenToSixGlide && remaining > 0 {
+                        guard self.graph.updatePsychoacousticFrequencies(
+                            left: settings.left, right: settings.right
+                        ) else {
+                            self.errorMessage = "Program transition could not be queued."
+                            self.session?.stopPlayback(for: self.sourceID)
+                            return
+                        }
+                    }
+                }
                 if remaining <= 0 {
                     _ = self.graph.updatePsychoacousticOutputVolume(0)
                     self.session?.stopPlayback(for: self.sourceID)
@@ -215,7 +276,7 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
                 if remaining <= PsychoacousticSessionEnvelope.fadeSeconds {
                     self.fadeRemainingSeconds = remaining
                     _ = self.graph.updatePsychoacousticOutputVolume(
-                        Double(PsychoacousticSessionEnvelope.gain(remaining: remaining)))
+                        mixerLevel * Double(PsychoacousticSessionEnvelope.gain(remaining: remaining)))
                 } else {
                     self.fadeRemainingSeconds = nil
                 }
@@ -258,5 +319,42 @@ enum PsychoacousticSessionEnvelope {
     static func gain(remaining: TimeInterval) -> Float {
         let u = 1 - min(1, max(0, remaining / fadeSeconds))
         return Float(0.5 * (1 + cos(.pi * u)))
+    }
+}
+
+
+/// Original acoustic controls only: exact output frequencies are specified;
+/// no EEG state, cognitive change or clinical effect is inferred.
+/// The steady 6 Hz choice is an **acoustic comparison**, not a claim that the
+/// 2026 PLOS ONE self-report results replicate on this user's device.
+enum ExperimentalListeningProgram: String, CaseIterable {
+    case steadySix
+    case tenToSixGlide
+
+    var label: String {
+        switch self {
+        case .steadySix: return "Steady 6 Hz (5 min)"
+        case .tenToSixGlide: return "Original 10 → 6 Hz glide (5 min)"
+        }
+    }
+
+    var initialLeftHz: Double {
+        switch self {
+        case .steadySix: return 244
+        case .tenToSixGlide: return 240
+        }
+    }
+    var initialBeatHz: Double {
+        switch self {
+        case .steadySix: return 6
+        case .tenToSixGlide: return 10
+        }
+    }
+
+    func carriers(progress: Double) -> (left: Double, right: Double, beat: Double) {
+        let u = progress.isFinite ? min(1, max(0, progress)) : 0
+        let ease = u * u * (3 - 2 * u)
+        let left = self == .steadySix ? 244 : 240 + 4 * ease
+        return (left, 250, 250 - left)
     }
 }

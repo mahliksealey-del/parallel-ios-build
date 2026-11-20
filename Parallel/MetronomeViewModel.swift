@@ -9,6 +9,7 @@ final class MetronomeViewModel: ObservableObject {
     @Published private(set) var routeDescription = "Audio route activates when playback starts."
     @Published var bpm = 120.0
     @Published var gain = 0.65
+    var mixerLevel = 1.0
     @Published var boostedClicks = false
     @Published private(set) var isPlaying = false
 
@@ -77,7 +78,8 @@ final class MetronomeViewModel: ObservableObject {
     }
 
     func applyGain() {
-        do { try engine.setGain(Float(gain)) } catch { errorMessage = error.localizedDescription }
+        do { try engine.setGain(Float(gain * mixerLevel)) }
+        catch { errorMessage = error.localizedDescription }
     }
 
     func applyClickBoost() {

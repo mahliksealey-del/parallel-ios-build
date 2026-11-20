@@ -77,6 +77,8 @@ final class MediaMixerViewModel: ObservableObject, AudioPlaybackSource {
     @Published private(set) var durationSeconds = 0.0
     @Published private(set) var currentSeconds = 0.0
     @Published var volume = 0.65
+    // Relative advanced mixer trim; user volume remains the remembered baseline.
+    var mixerLevel = 1.0
     @Published var boostedAudio = false
 
     private weak var coordinator: AudioSessionCoordinator?
@@ -146,7 +148,7 @@ final class MediaMixerViewModel: ObservableObject, AudioPlaybackSource {
             reportError("Video volume must be between 0 and 100%.")
             return
         }
-        player?.volume = Float(volume)
+        player?.volume = Float(volume * mixerLevel)
     }
 
     func applyAudioBoost() async {
@@ -200,7 +202,7 @@ final class MediaMixerViewModel: ObservableObject, AudioPlaybackSource {
             let nextItem = AVPlayerItem(asset: asset)
             let nextPlayer = AVPlayer(playerItem: nextItem)
             Self.configureForBackgroundPlayback(nextPlayer)
-            nextPlayer.volume = Float(volume)
+            nextPlayer.volume = Float(volume * mixerLevel)
 
             coordinator?.stopPlayback(for: sourceID)
             removeObservers()

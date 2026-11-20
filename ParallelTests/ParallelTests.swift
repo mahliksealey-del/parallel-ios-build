@@ -661,6 +661,43 @@ final class ParallelTests: XCTestCase {
         XCTAssertTrue(coordinator.requestedSources.isEmpty)
     }
 
+    func testMixerRoutingMuteSoloAndFiniteTrims() {
+        let levels = MiniMixerRouting.outputLevels(
+            trims: [0.2, 0.4, 0.6, 0.8, 1],
+            muted: [1], solo: [0, 1, 4]
+        )
+        XCTAssertEqual(levels, [0.2, 0, 0, 0, 1])
+        XCTAssertEqual(
+            MiniMixerRouting.outputLevels(
+                trims: [1, .nan, 1, 1, 1], muted: [], solo: []
+            ), [1, 0, 1, 1, 1]
+        )
+        XCTAssertEqual(
+            MiniMixerRouting.outputLevels(
+                trims: [1, 1, 1, 1, 1], muted: [], solo: []
+            ), [1, 1, 1, 1, 1]
+        )
+    }
+
+    func testExperimentalProgramCarriersContinuousAndBounded() {
+        let steady = ExperimentalListeningProgram.steadySix
+        XCTAssertEqual(steady.carriers(progress: 0).beat, 6)
+        XCTAssertEqual(steady.carriers(progress: 0.5).beat, 6)
+        let glide = ExperimentalListeningProgram.tenToSixGlide
+        XCTAssertEqual(glide.carriers(progress: 0).beat, 10)
+        XCTAssertEqual(glide.carriers(progress: 0.5).beat, 8, accuracy: 0.00001)
+        XCTAssertEqual(glide.carriers(progress: 1).beat, 6)
+        var prev = 10.0
+        for i in 0...1000 {
+            let c = glide.carriers(progress: Double(i) / 1000)
+            XCTAssertEqual(c.right, 250, accuracy: 0.0000001)
+            XCTAssertLessThanOrEqual(c.beat, prev + 0.0000001)
+            prev = c.beat
+        }
+        XCTAssertEqual(glide.carriers(progress: .nan).beat, 10)
+        XCTAssertEqual(glide.carriers(progress: 2).beat, 6)
+    }
+
     func testVideoBoostAppliesMakeupToQuietAudioAndBoundsPeaks() {
         var quiet = Array(repeating: Float(0.1), count: 4_800)
         VideoAudioBoostPolicy.process(&quiet)
