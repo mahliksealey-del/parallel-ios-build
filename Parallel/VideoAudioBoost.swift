@@ -70,7 +70,12 @@ struct VideoAudioDynamics {
         // adjusts both stereo channels by the same frame gain. No claim
         // of lookahead or intersample/true-peak compliance.
         let requested = makeup * compressionGain
-        return peak > 0 ? min(requested, VideoAudioBoostPolicy.ceiling / peak) : requested
+        // Reserve a small floating-point multiplication margin: a cap of
+        // exactly 0.9 / 0.8 rounds back to 0.90000004 in Float32.
+        // Guarding at 0.8999 ensures the *actual output* remains <= 0.9,
+        // rather than merely weakening a peak-boundary assertion.
+        let safeCeiling = VideoAudioBoostPolicy.ceiling - 0.0001
+        return peak > 0 ? min(requested, safeCeiling / peak) : requested
     }
 }
 
