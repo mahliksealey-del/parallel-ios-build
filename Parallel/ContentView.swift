@@ -192,7 +192,21 @@ struct ContentView: View {
                     .onChange(of: psychoacoustic.sessionMinutes) { _ in
                         psychoacoustic.applySessionTimer()
                     }
-                    Text("At completion, generated audio fades to silence and stops. Saved settings never start playback automatically.")
+                    if let remaining = psychoacoustic.remainingSeconds {
+                        HStack {
+                            Text("Remaining")
+                            Spacer()
+                            Text(Self.formatCountdown(remaining))
+                                .font(.headline.monospacedDigit())
+                                .accessibilityIdentifier("psychoacoustic-countdown")
+                        }
+                        if let fadeRemaining = psychoacoustic.fadeRemainingSeconds {
+                            Text("Fading out · \(Self.formatCountdown(fadeRemaining))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Text("Timed sessions fade the generated tone and noise together over the last 10 seconds. Headphone removal and manual Stop remain immediate.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -212,6 +226,11 @@ struct ContentView: View {
             }
             .navigationTitle("Parallel")
         }
+    }
+
+    private static func formatCountdown(_ seconds: TimeInterval) -> String {
+        let total = max(0, Int(ceil(seconds)))
+        return String(format: "%02d:%02d", total / 60, total % 60)
     }
 
     private func noiseSlider(_ title: String, value: Binding<Double>) -> some View {

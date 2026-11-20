@@ -597,6 +597,23 @@ final class ParallelTests: XCTestCase {
         XCTAssertEqual(f.coordinator.state, .active)
     }
 
+    func testSessionCompositeEndFadeMath() {
+        let envelope = PsychoacousticSessionEnvelope.self
+        XCTAssertEqual(envelope.remaining(elapsed: 29, duration: 30), 1)
+        XCTAssertEqual(envelope.remaining(elapsed: 31, duration: 30), 0)
+        XCTAssertEqual(envelope.gain(remaining: 30), 1, accuracy: 0.000001)
+        XCTAssertEqual(envelope.gain(remaining: 10), 1, accuracy: 0.000001)
+        XCTAssertEqual(envelope.gain(remaining: 5), 0.5, accuracy: 0.000001)
+        XCTAssertEqual(envelope.gain(remaining: 0), 0, accuracy: 0.000001)
+        var previous: Float = 1
+        for i in 0...1000 {
+            let remaining = 10 - Double(i) * 0.01
+            let current = envelope.gain(remaining: remaining)
+            XCTAssertLessThanOrEqual(current, previous + 0.000001)
+            previous = current
+        }
+    }
+
     func testPsychoacousticBeatBandLabels() {
         XCTAssertEqual(PsychoacousticViewModel.bandLabel(for: 2), "Delta-range")
         XCTAssertEqual(PsychoacousticViewModel.bandLabel(for: 6), "Theta-range")

@@ -16,6 +16,8 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
     @Published var brownNoise = 0.0
     @Published var sessionMinutes = 0
     @Published private(set) var isPlaying = false
+    @Published private(set) var remainingSeconds: TimeInterval?
+    @Published private(set) var fadeRemainingSeconds: TimeInterval?
     @Published private(set) var errorMessage: String?
 
     /// A conventional EEG frequency-band *label* for the stimulus difference,
@@ -67,7 +69,8 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
         }
         isPlaying = session.requestedSources.contains(sourceID)
                    && session.state == .active
-        if isPlaying { scheduleStopIfNeeded() } else { stopTask?.cancel() }
+        // start(sampleRate:) owns session timing; a failed start never arms a clock.
+        if !isPlaying { cancelSessionClock() }
     }
 
     func applyFrequencies() {
@@ -129,6 +132,7 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
     }
 
     func reportError(_ message: String) {
+        cancelSessionClock()
         errorMessage = message
         isPlaying = false
     }
@@ -150,22 +154,14 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
     }
 
     func stop() {
-        stopTask?.cancel()
+        cancelSessionClock()
         graph.stopPsychoacoustic()
         isPlaying = false
     }
 
-    func markInterrupted() {
-        stopTask?.cancel()
-        graph.stopPsychoacoustic()
-        isPlaying = false
-    }
+    func markInterrupted() { stop() }
 
-    func markRecovering() {
-        stopTask?.cancel()
-        graph.stopPsychoacoustic()
-        isPlaying = false
-    }
+    func markRecovering() { stop() }
 
     private var parametersAreValid: Bool {
         carrierHz.isFinite && (100...800).contains(carrierHz)
@@ -184,19 +180,55 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
         .init(white: whiteNoise, pink: pinkNoise, brown: brownNoise)
     }
 
-    private func scheduleStopIfNeeded() {
+    private func cancelSessionClock() {
         stopTask?.cancel()
-        guard sessionMinutes > 0 else { return }
-        let minutes = sessionMinutes
+        stopTask = nil
+        remainingSeconds = nil
+        fadeRemainingSeconds = nil
+    }
+
+    private func scheduleStopIfNeeded() {
+        cancelSessionClock()
+        // The psycho source owns this node. Do not affect the metronome/video paths.
+        _ = graph.updatePsychoacousticOutputVolume(1)
+        guard isPlaying, sessionMinutes > 0 else { return }
+
+        // Monotonic deadline avoids cumulative Task.sleep drift and re-syncs
+        // the visible countdown after a period with no foreground UI updates.
+        // Changing duration intentionally starts a fresh interval, as before.
+        let duration = TimeInterval(sessionMinutes * 60)
+        let startUptime = ProcessInfo.processInfo.systemUptime
+        remainingSeconds = duration
         stopTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(minutes) * 60 * 1_000_000_000)
-            guard !Task.isCancelled, let self else { return }
-            _ = self.graph.updatePsychoacousticGain(0)
-            _ = self.graph.updatePsychoacousticNoise(.init())
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            guard !Task.isCancelled else { return }
-            self.session?.stopPlayback(for: self.sourceID)
-            self.isPlaying = false
+            guard let self else { return }
+            while !Task.isCancelled {
+                guard self.isPlaying else { return }
+                let elapsed = max(0, ProcessInfo.processInfo.systemUptime - startUptime)
+                let remaining = PsychoacousticSessionEnvelope.remaining(
+                    elapsed: elapsed, duration: duration)
+                self.remainingSeconds = remaining
+                if remaining <= 0 {
+                    _ = self.graph.updatePsychoacousticOutputVolume(0)
+                    self.session?.stopPlayback(for: self.sourceID)
+                    return
+                }
+                if remaining <= PsychoacousticSessionEnvelope.fadeSeconds {
+                    self.fadeRemainingSeconds = remaining
+                    _ = self.graph.updatePsychoacousticOutputVolume(
+                        Double(PsychoacousticSessionEnvelope.gain(remaining: remaining)))
+                } else {
+                    self.fadeRemainingSeconds = nil
+                }
+                // Control-rate envelope for this initial prototype. True
+                // sample-accurate fading and background tails need device tests.
+                do {
+                    try await Task.sleep(nanoseconds:
+                        remaining <= PsychoacousticSessionEnvelope.fadeSeconds
+                        ? 50_000_000 : 250_000_000)
+                } catch {
+                    return
+                }
+            }
         }
     }
 
@@ -209,5 +241,22 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
         defaults.set(whiteNoise, forKey: "psycho.white")
         defaults.set(pinkNoise, forKey: "psycho.pink")
         defaults.set(brownNoise, forKey: "psycho.brown")
+    }
+}
+
+
+/// Original deterministic raised-cosine control envelope. It attenuates the
+/// existing psychoacoustic mixer (tone + all noise layers) as one composite.
+/// It is not a claim of sample-accurate multi-AVPlayer synchronization.
+enum PsychoacousticSessionEnvelope {
+    static let fadeSeconds: TimeInterval = 10
+
+    static func remaining(elapsed: TimeInterval, duration: TimeInterval) -> TimeInterval {
+        max(0, duration - max(0, elapsed))
+    }
+
+    static func gain(remaining: TimeInterval) -> Float {
+        let u = 1 - min(1, max(0, remaining / fadeSeconds))
+        return Float(0.5 * (1 + cos(.pi * u)))
     }
 }

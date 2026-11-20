@@ -144,6 +144,15 @@ final class AudioGraphCoordinator: AudioGraphControlling {
         return nodes.setGain(gain, fadeFrames: Int(sampleRate * 0.04))
     }
 
+    /// Session-ending attenuation for the entire generated tone+noise bus.
+    /// Headphone loss still invokes the independent emergency disarm first.
+    func updatePsychoacousticOutputVolume(_ volume: Double) -> Bool {
+        guard psychoacousticActive, let nodes = psychoacousticNodes,
+              volume.isFinite, (0...1).contains(volume) else { return false }
+        nodes.gainMixer.outputVolume = Float(volume)
+        return true
+    }
+
     func updatePsychoacousticMode(_ mode: PsychoacousticMode) -> Bool {
         psychoacousticNodes?.setMode(mode) ?? false
     }
