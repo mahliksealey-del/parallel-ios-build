@@ -935,7 +935,11 @@ private struct MetronomeClockPanel: View {
         Toggle("Reset breathing on each minute (opt-in)",
                isOn: $model.clockSettings.resetBreathingOnMinute)
         Toggle("Inhale/exhale transition tones", isOn: $model.clockSettings.breathCues)
+        Slider(value: $model.clockSettings.breathCueVolume, in: 0...1)
+            .accessibilityLabel("Breathing cue volume")
         Toggle("Higher-timeframe alignment tones", isOn: $model.clockSettings.supercycleCues)
+        Slider(value: $model.clockSettings.groupCueVolume, in: 0...1)
+            .accessibilityLabel("Higher-timeframe cue volume")
         Toggle("Distinct minute click", isOn: $model.clockSettings.markerEnabled)
         Slider(value: $model.clockSettings.markerVolume, in: 0...1)
             .accessibilityLabel("Minute marker level")
@@ -950,6 +954,10 @@ private struct MetronomeClockPanel: View {
             Text("None").tag(CrossRhythmMode.off)
             Text("Grouped polymeter").tag(CrossRhythmMode.grouped)
             Text("Ratio polyrhythm").tag(CrossRhythmMode.ratio)
+        }
+        if model.clockSettings.crossMode != .off {
+            Slider(value: $model.clockSettings.crossCueVolume, in: 0...1)
+                .accessibilityLabel("Cross rhythm cue volume")
         }
         if model.clockSettings.crossMode == .grouped {
             Stepper("Secondary group: \(model.clockSettings.crossGroup) quarter beats",
@@ -978,6 +986,50 @@ private struct MetronomeClockPanel: View {
         }
         TimelineView(.periodic(from: .now, by: 0.1)) { timeline in
             advancedLive(at: timeline.date)
+        }
+        DisclosureGroup("My metronome presets") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("These save the clock, rhythm and breathing configuration only. Video and psychoacoustic presets remain independent.")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    TextField("Name metronome preset", text: $metronomePresetName)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Save") {
+                        model.saveClockPreset(name: metronomePresetName)
+                        if model.errorMessage == nil { metronomePresetName = "" }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.isPlaying ||
+                        metronomePresetName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityIdentifier("p4-metronome-preset-save")
+                }
+                ForEach(model.savedClockPresets) { preset in
+                    HStack {
+                        Button(preset.name) {
+                            model.loadClockPreset(id: preset.id)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(model.isPlaying)
+                        if model.selectedClockPresetID == preset.id {
+                            Image(systemName: "checkmark.circle.fill")
+                        }
+                        Spacer()
+                        Button("Update") {
+                            model.updateClockPreset(id: preset.id)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(model.isPlaying)
+                        Button(role: .destructive) {
+                            model.deleteClockPreset(id: preset.id)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(model.isPlaying)
+                        .accessibilityLabel("Delete metronome preset \(preset.name)")
+                    }
+                }
+            }
         }
         Text("Clock time is a mathematical reference. Built-in speaker, wired and Bluetooth output have different unmeasured latency. NTP correction is not required for offline use.")
             .font(.caption).foregroundStyle(.secondary)
@@ -1036,12 +1088,26 @@ private struct MetronomeClockPanel: View {
             if let position {
                 LabeledContent("Current measure",
                     value: "\(position.measure + 1) · \(ClockRhythmMath.meterBeatDescription(position.beatInMeasure))")
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 5) {
+                        ForEach(0..<model.clockSettings.meterNumerator, id: \.self) { beat in
+                            Circle()
+                                .fill(beat == Int(position.beatInMeasure) - 1
+                                      ? Color.accentColor : Color.secondary.opacity(0.28))
+                                .frame(width: 12, height: 12)
+                        }
+                    }
+                    .padding(.vertical, 5)
+                }
+                .accessibilityLabel("Current metrical beat visualization")
                 LabeledContent("Breathing cycle",
                     value: "\(position.breathGroup + 1) · \(position.exhaling ? "Out" : "In") \(number(position.breathCountInGroup))")
-                ProgressView(value: max(0, position.nextBreathInSeconds),
-                    total: max(1, Double(model.clockSettings.inhaleCounts + model.clockSettings.exhaleCounts)
-                        * 60 / model.bpm * 4 / Double(model.clockSettings.countDenominator)))
-                    .accessibilityLabel("Time to next breathing group")
+                let totalCounts = Double(
+                    model.clockSettings.inhaleCounts + model.clockSettings.exhaleCounts)
+                ProgressView(value: max(0, min(totalCounts,
+                    position.breathCountInGroup - 1)), total: totalCounts)
+                    .tint(position.exhaling ? .teal : .blue)
+                    .accessibilityLabel("Current inhale or exhale group progress")
             }
             if let next {
                 LabeledContent("Next full alignment",

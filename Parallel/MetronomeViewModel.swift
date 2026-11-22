@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import UIKit
 import MetronomeEngine
 
 @MainActor
@@ -12,10 +13,13 @@ final class MetronomeViewModel: ObservableObject {
     var mixerLevel = 1.0
     @Published var boostedClicks = false
     @Published var clockSettings = ClockRhythmSettings()
+    @Published private(set) var savedClockPresets: [MetronomeClockPreset] = []
+    @Published private(set) var selectedClockPresetID: UUID?
     var minuteAnalysis: MinuteRhythmAnalysis? {
         ClockRhythmMath.analyze(bpm: bpm, settings: clockSettings)
     }
     @Published private(set) var isPlaying = false
+    private var significantClockObserver: NSObjectProtocol?
 
     private let engine: MetronomeEngineProtocol
     let coordinator: AudioSessionCoordinator
@@ -38,6 +42,15 @@ final class MetronomeViewModel: ObservableObject {
            BeatFrameScheduler.bpmRange.contains(saved), saved.isFinite {
             bpm = saved
         }
+        if let data = UserDefaults.standard.data(forKey: "metronome.presets.v1"),
+           let decoded = try? JSONDecoder().decode([MetronomeClockPreset].self, from: data) {
+            savedClockPresets = decoded.filter { $0.isValid }
+        }
+        if let raw = UserDefaults.standard.string(forKey: "metronome.selectedPreset.v1"),
+           let id = UUID(uuidString: raw),
+           savedClockPresets.contains(where: { $0.id == id }) {
+            selectedClockPresetID = id
+        }
         // Init is always stopped, so no player/audio session is touched.
         try? engine.setBPM(bpm)
         try? engine.setClockSettings(clockSettings)
@@ -50,6 +63,17 @@ final class MetronomeViewModel: ObservableObject {
         coordinator.onRouteChange = { [weak self] route in
             let names = route.outputs.isEmpty ? "Unknown output" : route.outputs.joined(separator: ", ")
             self?.routeDescription = "\(names) • \(Int(route.sampleRate)) Hz • \(route.outputChannels) ch"
+        }
+        // iOS announces manual/system clock or time-zone changes. Never
+        // read Date or change clocks inside the PCM renderer; remap on a
+        // separate control thread while preserving all other audio sources.
+        significantClockObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.significantTimeChangeNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.reanchorAfterSystemClockChange()
+            }
         }
     }
 
@@ -95,17 +119,36 @@ final class MetronomeViewModel: ObservableObject {
         refreshMetronomeState()
     }
 
+    private func reanchorAfterSystemClockChange() {
+        guard clockSettings.clockSync, coordinator.userRequestedPlayback,
+              state == .active else { return }
+        do {
+            // Recreating just the metronome source captures a fresh matched
+            // wall/host mapping. Other AVPlayers and psycho DSP keep playing.
+            try coordinator.reconfigureMetronome {
+                try self.engine.setClockSettings(self.clockSettings)
+            }
+            errorMessage = nil
+        } catch {
+            errorMessage = "Clock change: " + error.localizedDescription
+        }
+        refreshMetronomeState()
+    }
+
     func applyClockSettings() {
         guard clockSettings.isValid else {
             errorMessage = "Unsupported clock, meter, or breathing settings."
             return
         }
         do {
+            let audioChanged = !engine.clockSettings.hasSameAudioConfiguration(
+                as: clockSettings)
             if coordinator.userRequestedPlayback && state == .active {
-                // Only the metronome PCM source is rebuilt; video and
-                // psychoacoustic transport remain untouched.
-                try coordinator.reconfigureMetronome {
-                    try self.engine.setClockSettings(self.clockSettings)
+                if audioChanged {
+                    // A real sound change rebuilds only the metronome source.
+                    try coordinator.reconfigureMetronome {
+                        try self.engine.setClockSettings(self.clockSettings)
+                    }
                 }
             } else {
                 try engine.setClockSettings(clockSettings)
@@ -142,6 +185,82 @@ final class MetronomeViewModel: ObservableObject {
             errorMessage = error.localizedDescription
         }
         refreshMetronomeState()
+    }
+
+    /// Snapshot only metronome controls; loading a preset never begins audio.
+    private var currentClockPresetSettings: ClockRhythmSettings {
+        var settings = clockSettings
+        settings.sessionStartUnixSeconds = nil
+        return settings
+    }
+
+    func saveClockPreset(name: String) {
+        guard !isPlaying else {
+            errorMessage = "Stop metronome playback before saving a preset."
+            return
+        }
+        let trimmed = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
+        let preset = MetronomeClockPreset(
+            id: UUID(), name: trimmed, bpm: bpm, settings: currentClockPresetSettings)
+        guard preset.isValid else {
+            errorMessage = "Choose a name and valid tempo/meter/breathing settings."
+            return
+        }
+        savedClockPresets.append(preset)
+        selectedClockPresetID = preset.id
+        persistClockPresets()
+        errorMessage = nil
+    }
+
+    func loadClockPreset(id: UUID) {
+        guard !isPlaying, let preset = savedClockPresets.first(where: { $0.id == id }),
+              preset.isValid else {
+            errorMessage = "Stop playback and choose a valid metronome preset."
+            return
+        }
+        bpm = preset.bpm
+        clockSettings = preset.settings
+        selectedClockPresetID = id
+        applySettings()
+        persistClockPresets()
+    }
+
+    func updateClockPreset(id: UUID) {
+        guard !isPlaying,
+              let index = savedClockPresets.firstIndex(where: { $0.id == id }) else {
+            errorMessage = "Stop playback before updating a metronome preset."
+            return
+        }
+        let updated = MetronomeClockPreset(
+            id: id, name: savedClockPresets[index].name,
+            bpm: bpm, settings: currentClockPresetSettings)
+        guard updated.isValid else {
+            errorMessage = "Invalid metronome settings; preset unchanged."
+            return
+        }
+        savedClockPresets[index] = updated
+        selectedClockPresetID = id
+        persistClockPresets()
+        errorMessage = nil
+    }
+
+    func deleteClockPreset(id: UUID) {
+        guard !isPlaying else { return }
+        savedClockPresets.removeAll { $0.id == id }
+        if selectedClockPresetID == id { selectedClockPresetID = nil }
+        persistClockPresets()
+    }
+
+    private func persistClockPresets() {
+        let defaults = UserDefaults.standard
+        if let data = try? JSONEncoder().encode(savedClockPresets) {
+            defaults.set(data, forKey: "metronome.presets.v1")
+        }
+        if let id = selectedClockPresetID {
+            defaults.set(id.uuidString, forKey: "metronome.selectedPreset.v1")
+        } else {
+            defaults.removeObject(forKey: "metronome.selectedPreset.v1")
+        }
     }
 
     func retry() {

@@ -249,8 +249,14 @@ private final class RenderState: @unchecked Sendable {
                 sound += breathVoice.next()
                 sound += crossVoice.next()
                 sound += groupVoice.next()
-                // Fixed smooth saturator stops overlapping cues exceeding 1.0.
-                sound = sound / (1 + abs(sound)) * 0.95
+                // Single clicks preserve their intended loudness. An
+                // identity-through-0.92 smooth limiter limits coincident
+                // tones below full scale without re-amplifying quiet sound.
+                let magnitude = abs(sound)
+                if magnitude > 0.92 {
+                    sound = (sound < 0 ? -1 : 1) *
+                        (0.92 + 0.075 * tanh((magnitude - 0.92) / 0.075))
+                }
             }
             let sample = Float(sound)
             for buffer in buffers {
@@ -265,15 +271,19 @@ private final class RenderState: @unchecked Sendable {
                                                   period: secondsPerNotePulse),
               let minute = ClockRhythmMath.eventIndex(atUnixSeconds: unix, period: 60)
         else { return }
+        let minuteCrossed = lastMinuteIndex.map { minute == $0 + 1 } ?? false
         if let previous = lastBeatIndex, beat > previous {
             let accent = beat % Int64(settings.meterNumerator) == 0
+            // The unique minute chime wins when musical and real-world
+            // boundaries overlap. Do not stack two full-power transients.
+            let beatGain = (minuteCrossed && settings.markerEnabled) ? 0.25 : 1.0
             beatVoice.start(frequency: accent ? 1_600 : 1_050,
-                            seconds: 0.018, volume: peakAmplitude,
+                            seconds: 0.018, volume: peakAmplitude * beatGain,
                             sampleRate: sampleRate)
         }
         lastBeatIndex = beat
 
-        if let previous = lastMinuteIndex, minute == previous + 1 {
+        if minuteCrossed {
             if settings.markerEnabled {
                 let master = settings.supercycleCues
                     && fullAlignmentMinutes.map { minute % $0 == 0 } == true
@@ -284,13 +294,25 @@ private final class RenderState: @unchecked Sendable {
                                   volume: peakAmplitude * settings.markerVolume,
                                   sampleRate: sampleRate)
             }
-            if settings.supercycleCues && minute % Int64(settings.groupingMinutes) == 0 {
-                groupVoice.start(frequency: 580, seconds: 0.11,
-                                 volume: peakAmplitude * 0.22,
-                                 sampleRate: sampleRate)
-            }
-        }
+         }
         lastMinuteIndex = minute
+
+        // Higher-timeframe marker may be anchored either to real-world
+        // clock blocks or the particular session's Play instant.
+        let groupOrigin = settings.blockAnchor == .session
+            ? (settings.sessionStartUnixSeconds ?? anchorWallSeconds) : 0
+        let groupSeconds = Double(settings.groupingMinutes) * 60
+        if let group = ClockRhythmMath.eventIndex(
+            atUnixSeconds: unix - groupOrigin, period: groupSeconds) {
+            if settings.supercycleCues, let previous = lastGroupIndex, group > previous {
+                groupVoice.start(
+                    frequency: 580, seconds: 0.11,
+                    volume: peakAmplitude * settings.groupCueVolume,
+                    sampleRate: sampleRate
+                )
+            }
+            lastGroupIndex = group
+        }
 
         let breathPeriod = secondsPerBreathCount *
             Double(settings.inhaleCounts + settings.exhaleCounts)
@@ -303,10 +325,10 @@ private final class RenderState: @unchecked Sendable {
                                                period: breathPeriod) {
             if settings.breathCues, let previous = lastBreathStartIndex, start > previous {
                 breathVoice.start(frequency: 680, seconds: 0.05,
-                                  volume: peakAmplitude * 0.20, sampleRate: sampleRate)
+                                  volume: peakAmplitude * settings.breathCueVolume, sampleRate: sampleRate)
             } else if settings.breathCues, let previous = lastBreathOutIndex, out > previous {
                 breathVoice.start(frequency: 420, seconds: 0.065,
-                                  volume: peakAmplitude * 0.18, sampleRate: sampleRate)
+                                  volume: peakAmplitude * settings.breathCueVolume * 0.9, sampleRate: sampleRate)
             }
             lastBreathStartIndex = start
             lastBreathOutIndex = out
@@ -325,7 +347,7 @@ private final class RenderState: @unchecked Sendable {
            let cross = ClockRhythmMath.eventIndex(atUnixSeconds: unix, period: crossPeriod) {
             if let previous = lastCrossIndex, cross > previous {
                 crossVoice.start(frequency: 780, seconds: 0.012,
-                                 volume: peakAmplitude * 0.26, sampleRate: sampleRate)
+                                 volume: peakAmplitude * settings.crossCueVolume, sampleRate: sampleRate)
             }
             lastCrossIndex = cross
         }

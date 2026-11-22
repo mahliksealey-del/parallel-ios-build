@@ -74,6 +74,9 @@ public struct ClockRhythmSettings: Codable, Equatable {
     public var markerEnabled = true
     public var markerVolume = 0.55
     public var markerVariant = 0
+    public var breathCueVolume = 0.2
+    public var crossCueVolume = 0.26
+    public var groupCueVolume = 0.22
     public var breathCues = false
     public var supercycleCues = false
     public var crossMode: CrossRhythmMode = .off
@@ -89,6 +92,33 @@ public struct ClockRhythmSettings: Codable, Equatable {
 
     public init() {}
 
+    /// Screen presentation changes must not interrupt an already playing PCM
+    /// source. Compare only parameters that affect rendered audio or phase.
+    public func hasSameAudioConfiguration(as other: Self) -> Bool {
+        clockSync == other.clockSync
+          && meterNumerator == other.meterNumerator
+          && meterDenominator == other.meterDenominator
+          && inhaleCounts == other.inhaleCounts
+          && exhaleCounts == other.exhaleCounts
+          && countDenominator == other.countDenominator
+          && markerEnabled == other.markerEnabled
+          && markerVolume == other.markerVolume
+          && markerVariant == other.markerVariant
+          && breathCueVolume == other.breathCueVolume
+          && crossCueVolume == other.crossCueVolume
+          && groupCueVolume == other.groupCueVolume
+          && breathCues == other.breathCues
+          && supercycleCues == other.supercycleCues
+          && crossMode == other.crossMode
+          && crossGroup == other.crossGroup
+          && ratioPulses == other.ratioPulses
+          && ratioDuration == other.ratioDuration
+          && groupingMinutes == other.groupingMinutes
+          && blockAnchor == other.blockAnchor
+          && resetBreathingOnMinute == other.resetBreathingOnMinute
+          && sessionStartUnixSeconds == other.sessionStartUnixSeconds
+    }
+
     public var isValid: Bool {
         (1...32).contains(meterNumerator)
             && [1, 2, 4, 8, 16, 32].contains(meterDenominator)
@@ -96,6 +126,9 @@ public struct ClockRhythmSettings: Codable, Equatable {
             && [1, 2, 4, 8, 16, 32].contains(countDenominator)
             && markerVolume.isFinite && (0...1).contains(markerVolume)
             && (0...2).contains(markerVariant)
+            && [breathCueVolume, crossCueVolume, groupCueVolume].allSatisfy {
+                $0.isFinite && (0...1).contains($0)
+            }
             && (2...64).contains(crossGroup)
             && (2...16).contains(ratioPulses)
             && (2...32).contains(ratioDuration)
@@ -235,7 +268,11 @@ public enum ClockRhythmMath {
                   / Int64(settings.meterDenominator)
         let breath = Int64(settings.inhaleCounts + settings.exhaleCounts) * 4
                      * ticksPerQuarter / Int64(settings.countDenominator)
-        guard let combined = lcm(bar, breath) else { return nil }
+        // Hard minute resets make breathing start at every real :00.
+        // In that mode the breathing cycle does not need to complete for a
+        // minute boundary to be a shared musical/reset phase.
+        guard let combined = settings.resetBreathingOnMinute
+            ? Optional(bar) : lcm(bar, breath) else { return nil }
         switch settings.crossMode {
         case .off: return combined
         case .grouped:
@@ -273,5 +310,29 @@ public enum ClockRhythmMath {
         let seconds = Double(alignmentMinutes) * 60
         let elapsed = positiveRemainder(unixSeconds, seconds)
         return seconds - elapsed
+    }
+}
+
+
+/// Metronome-specific saved configuration. Deliberately excludes the three
+/// AVPlayers, psychoacoustic presets, session timer and playback status.
+public struct MetronomeClockPreset: Codable, Identifiable {
+    public let id: UUID
+    public let name: String
+    public let bpm: Double
+    public let settings: ClockRhythmSettings
+
+    public init(id: UUID, name: String, bpm: Double, settings: ClockRhythmSettings) {
+        self.id = id
+        self.name = name
+        self.bpm = bpm
+        self.settings = settings
+    }
+
+    public var isValid: Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+          && name.count <= 80 && bpm.isFinite
+          && BeatFrameScheduler.bpmRange.contains(bpm)
+          && settings.isValid
     }
 }

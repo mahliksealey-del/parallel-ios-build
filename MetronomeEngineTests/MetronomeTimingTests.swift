@@ -137,6 +137,51 @@ final class MetronomeTimingTests: XCTestCase {
         XCTAssertEqual(justAfter.breathCountInGroup, 1.3, accuracy: 0.000001)
     }
 
+    func testBreathingResetOnMinuteChangesMasterCycleWithoutChangingMusicalMeter() throws {
+        var settings = ClockRhythmSettings()
+        settings.meterNumerator = 4
+        settings.inhaleCounts = 7
+        settings.exhaleCounts = 8
+        XCTAssertEqual(ClockRhythmMath.analyze(bpm: 90, settings: settings)?
+                       .masterAlignmentMinutes, 2)
+        settings.resetBreathingOnMinute = true
+        XCTAssertEqual(ClockRhythmMath.analyze(bpm: 90, settings: settings)?
+                       .masterAlignmentMinutes, 2)
+        let boundary = try XCTUnwrap(ClockRhythmMath.position(
+            atUnixSeconds: 60, bpm: 90, settings: settings))
+        XCTAssertEqual(boundary.breathCountInGroup, 1, accuracy: 0.000001)
+    }
+
+    func testPresentationOnlySettingsDoNotRebuildAudio() {
+        var a = ClockRhythmSettings()
+        var b = a
+        b.advancedView = true
+        b.showUTC = true
+        XCTAssertTrue(a.hasSameAudioConfiguration(as: b))
+        a.crossMode = .grouped
+        XCTAssertFalse(a.hasSameAudioConfiguration(as: b))
+    }
+
+    func testMetronomePresetsAreIsolatedFromMedia() throws {
+        var s = ClockRhythmSettings()
+        s.clockSync = true
+        s.breathCueVolume = 0.15
+        s.groupCueVolume = 0.1
+        s.sessionStartUnixSeconds = nil
+        let preset = MetronomeClockPreset(id: UUID(), name: "Clock Practice",
+                                           bpm: 82.5, settings: s)
+        XCTAssertTrue(preset.isValid)
+        let data = try JSONEncoder().encode(preset)
+        let restored = try JSONDecoder().decode(MetronomeClockPreset.self, from: data)
+        XCTAssertEqual(restored.id, preset.id)
+        XCTAssertEqual(restored.bpm, 82.5, accuracy: 0.000001)
+        XCTAssertEqual(restored.settings.breathCueVolume, 0.15, accuracy: 0.000001)
+        let json = String(decoding: data, as: UTF8.self)
+        XCTAssertFalse(json.contains("psychoacoustic"))
+        XCTAssertFalse(json.contains("AVPlayer"))
+        XCTAssertFalse(json.contains("video"))
+    }
+
     func testForecastLimitsAndSettingsPersistenceRoundTrip() throws {
         var settings = ClockRhythmSettings()
         settings.meterNumerator = 31
