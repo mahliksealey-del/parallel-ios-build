@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import Darwin
 
 public enum MetronomeEngineState: Equatable {
     case stopped
@@ -41,10 +42,12 @@ public protocol MetronomeEngineProtocol: AnyObject {
     var bpm: Double { get }
     var gain: Float { get }
     var boostedClicks: Bool { get }
+    var clockSettings: ClockRhythmSettings { get }
     var onStateChange: ((MetronomeEngineState) -> Void)? { get set }
     func setBPM(_ bpm: Double) throws
     func setGain(_ gain: Float) throws
     func setBoostedClicks(_ enabled: Bool) throws
+    func setClockSettings(_ settings: ClockRhythmSettings) throws
     func makeNodes(sampleRate: Double) throws -> MetronomeAudioNodes
     func markPlaying()
     func markFailed(_ message: String)
@@ -63,6 +66,7 @@ public final class MetronomeEngine: MetronomeEngineProtocol {
     /// Opt-in stronger click, using immutable per-render-state amplitude.
     /// Normal 0.55, boosted 0.90 (about +4.28 dB); below PCM full scale.
     public private(set) var boostedClicks = false
+    public private(set) var clockSettings = ClockRhythmSettings()
     public var onStateChange: ((MetronomeEngineState) -> Void)?
     private var gainMixer: AVAudioMixerNode?
 
@@ -85,6 +89,14 @@ public final class MetronomeEngine: MetronomeEngineProtocol {
         boostedClicks = enabled
     }
 
+    public func setClockSettings(_ settings: ClockRhythmSettings) throws {
+        guard state == .stopped || isFailure else { throw MetronomeEngineError.alreadyRunning }
+        guard settings.isValid else {
+            throw MetronomeEngineError.graphStartFailed("Invalid clock rhythm settings.")
+        }
+        clockSettings = settings
+    }
+
     public func makeNodes(sampleRate: Double) throws -> MetronomeAudioNodes {
         guard state != .playing && state != .starting else { throw MetronomeEngineError.alreadyRunning }
         guard sampleRate.isFinite, sampleRate > 0 else { throw MetronomeEngineError.invalidSampleRate }
@@ -94,10 +106,18 @@ public final class MetronomeEngine: MetronomeEngineProtocol {
         state = .starting
         let mixer = AVAudioMixerNode()
         mixer.outputVolume = gain
-        let renderState = RenderState(bpm: bpm, sampleRate: sampleRate,
-                                      peakAmplitude: boostedClicks ? 0.90 : 0.55)
-        let source = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
-            renderState.render(frameCount: frameCount, audioBufferList: audioBufferList)
+        let renderState = RenderState(
+            bpm: bpm, sampleRate: sampleRate,
+            peakAmplitude: boostedClicks ? 0.90 : 0.55,
+            settings: clockSettings,
+            anchorWallSeconds: Date().timeIntervalSince1970,
+            anchorHostSeconds: AVAudioTime.seconds(forHostTime: mach_absolute_time())
+        )
+        let source = AVAudioSourceNode(format: format) { _, timestamp, frameCount, audioBufferList -> OSStatus in
+            renderState.render(
+                timestamp: timestamp, frameCount: frameCount,
+                audioBufferList: audioBufferList
+            )
             return noErr
         }
         gainMixer = mixer
@@ -118,46 +138,196 @@ public final class MetronomeEngine: MetronomeEngineProtocol {
 
 }
 
-private final class RenderState: @unchecked Sendable {
-    private let sampleRate: Double
-    private let framesPerBeat: Double
-    private let peakAmplitude: Double
-    private var framePosition = 0.0
-    private var nextBeatFrame = 0.0
-    private var beatIndex = 0
-    private var clickRemaining = 0
-    private var clickLength = 0
-    private var clickFrequency = 1_000.0
+/// Each voice is finite, allocated before render, and advanced without locks.
+/// Keep this small: no heap work, Date calls, network, UI, or buffer allocations
+/// on the real-time audio thread.
+private struct ClickVoice {
+    private var samplesRemaining = 0
+    private var durationSamples = 1
+    private var phaseIncrement = 0.0
+    private var phase = 0.0
+    private var amplitude = 0.0
 
-    init(bpm: Double, sampleRate: Double, peakAmplitude: Double) {
-        self.sampleRate = sampleRate
-        self.framesPerBeat = sampleRate * 60.0 / bpm
-        self.peakAmplitude = peakAmplitude
+    mutating func start(frequency: Double, seconds: Double, volume: Double,
+                        sampleRate: Double) {
+        durationSamples = max(1, Int(seconds * sampleRate))
+        samplesRemaining = durationSamples
+        phaseIncrement = 2 * Double.pi * frequency / sampleRate
+        phase = 0
+        amplitude = volume
     }
 
-    func render(frameCount: AVAudioFrameCount, audioBufferList: UnsafeMutablePointer<AudioBufferList>) {
+    mutating func next() -> Double {
+        guard samplesRemaining > 0 else { return 0 }
+        let envelope = Double(samplesRemaining) / Double(durationSamples)
+        let output = sin(phase) * envelope * envelope * amplitude
+        phase += phaseIncrement
+        samplesRemaining -= 1
+        return output
+    }
+}
+
+private final class RenderState: @unchecked Sendable {
+    private let sampleRate: Double
+    private let secondsPerNotePulse: Double
+    private let secondsPerQuarter: Double
+    private let secondsPerBreathCount: Double
+    private let peakAmplitude: Double
+    private let settings: ClockRhythmSettings
+    private let anchorWallSeconds: Double
+    private let anchorHostSeconds: Double
+    private var renderedFrames: UInt64 = 0
+    private var lastBeatIndex: Int64?
+    private var lastMinuteIndex: Int64?
+    private var lastBreathStartIndex: Int64?
+    private var lastBreathOutIndex: Int64?
+    private var lastCrossIndex: Int64?
+    private var lastGroupIndex: Int64?
+    private var legacyFramePosition = 0.0
+    private var legacyNextBeatFrame = 0.0
+    private var legacyBeatIndex = 0
+    private var beatVoice = ClickVoice()
+    private var minuteVoice = ClickVoice()
+    private var breathVoice = ClickVoice()
+    private var crossVoice = ClickVoice()
+    private var groupVoice = ClickVoice()
+    private let fullAlignmentMinutes: Int64?
+
+    init(bpm: Double, sampleRate: Double, peakAmplitude: Double,
+         settings: ClockRhythmSettings, anchorWallSeconds: Double,
+         anchorHostSeconds: Double) {
+        self.sampleRate = sampleRate
+        self.secondsPerQuarter = 60 / bpm
+        self.secondsPerNotePulse = 60 / bpm * 4 / Double(settings.meterDenominator)
+        self.secondsPerBreathCount = 60 / bpm * 4 / Double(settings.countDenominator)
+        self.peakAmplitude = peakAmplitude
+        self.settings = settings
+        self.anchorWallSeconds = anchorWallSeconds
+        self.anchorHostSeconds = anchorHostSeconds
+        self.fullAlignmentMinutes = ClockRhythmMath.analyze(bpm: bpm, settings: settings)?
+            .masterAlignmentMinutes
+    }
+
+    func render(timestamp: UnsafePointer<AudioTimeStamp>, frameCount: AVAudioFrameCount,
+                audioBufferList: UnsafeMutablePointer<AudioBufferList>) {
         let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
+        let validHostTime = timestamp.pointee.mHostTime > 0
+        let startUnix: Double
+        if settings.clockSync && validHostTime {
+            // AVAudioSourceNode delivers the buffer's host timeline. Convert
+            // the host timestamp ONCE per buffer, not in the sample loop.
+            let hostSeconds = AVAudioTime.seconds(forHostTime: timestamp.pointee.mHostTime)
+            startUnix = anchorWallSeconds + (hostSeconds - anchorHostSeconds)
+        } else {
+            // Fallback covers simulators/routes that do not supply mHostTime.
+            // It is sample-continuous but its absolute initial latency is
+            // less certain than a valid host timestamp; diagnostics note this.
+            startUnix = anchorWallSeconds + Double(renderedFrames) / sampleRate
+        }
         for frame in 0..<Int(frameCount) {
-            if framePosition + 0.5 >= nextBeatFrame {
-                let accent = beatIndex == 0
-                clickLength = max(1, Int(sampleRate * 0.018))
-                clickRemaining = clickLength
-                clickFrequency = accent ? 1_600.0 : 1_050.0
-                beatIndex = (beatIndex + 1) % 4
-                nextBeatFrame += framesPerBeat
+            if settings.clockSync {
+                let unix = startUnix + Double(frame) / sampleRate
+                renderClockEvents(atUnixSeconds: unix)
+            } else {
+                // Exact original phase-zero behavior remains when Clock Sync
+                // is disabled, including immediate first click.
+                if legacyFramePosition + 0.5 >= legacyNextBeatFrame {
+                    let accent = legacyBeatIndex == 0
+                    beatVoice.start(
+                        frequency: accent ? 1_600 : 1_050, seconds: 0.018,
+                        volume: peakAmplitude, sampleRate: sampleRate
+                    )
+                    legacyBeatIndex = (legacyBeatIndex + 1) % settings.meterNumerator
+                    legacyNextBeatFrame += sampleRate * secondsPerNotePulse
+                }
+                legacyFramePosition += 1
             }
-            var sample: Float = 0
-            if clickRemaining > 0 {
-                let elapsed = clickLength - clickRemaining
-                let phase = 2.0 * Double.pi * clickFrequency * Double(elapsed) / sampleRate
-                let envelope = Double(clickRemaining) / Double(clickLength)
-                sample = Float(sin(phase) * envelope * envelope * peakAmplitude)
-                clickRemaining -= 1
+
+            var sound = beatVoice.next()
+            if settings.clockSync {
+                sound += minuteVoice.next()
+                sound += breathVoice.next()
+                sound += crossVoice.next()
+                sound += groupVoice.next()
+                // Fixed smooth saturator stops overlapping cues exceeding 1.0.
+                sound = sound / (1 + abs(sound)) * 0.95
             }
+            let sample = Float(sound)
             for buffer in buffers {
                 buffer.mData?.assumingMemoryBound(to: Float.self)[frame] = sample
             }
-            framePosition += 1
+        }
+        renderedFrames &+= UInt64(frameCount)
+    }
+
+    private func renderClockEvents(atUnixSeconds unix: Double) {
+        guard let beat = ClockRhythmMath.eventIndex(atUnixSeconds: unix,
+                                                  period: secondsPerNotePulse),
+              let minute = ClockRhythmMath.eventIndex(atUnixSeconds: unix, period: 60)
+        else { return }
+        if let previous = lastBeatIndex, beat > previous {
+            let accent = beat % Int64(settings.meterNumerator) == 0
+            beatVoice.start(frequency: accent ? 1_600 : 1_050,
+                            seconds: 0.018, volume: peakAmplitude,
+                            sampleRate: sampleRate)
+        }
+        lastBeatIndex = beat
+
+        if let previous = lastMinuteIndex, minute == previous + 1 {
+            if settings.markerEnabled {
+                let master = settings.supercycleCues
+                    && fullAlignmentMinutes.map { minute % $0 == 0 } == true
+                let frequency: Double = master ? 2_100 :
+                    (settings.markerVariant == 0 ? 1_830 :
+                     (settings.markerVariant == 1 ? 2_500 : 1_380))
+                minuteVoice.start(frequency: frequency, seconds: master ? 0.085 : 0.065,
+                                  volume: peakAmplitude * settings.markerVolume,
+                                  sampleRate: sampleRate)
+            }
+            if settings.supercycleCues && minute % Int64(settings.groupingMinutes) == 0 {
+                groupVoice.start(frequency: 580, seconds: 0.11,
+                                 volume: peakAmplitude * 0.22,
+                                 sampleRate: sampleRate)
+            }
+        }
+        lastMinuteIndex = minute
+
+        let breathPeriod = secondsPerBreathCount *
+            Double(settings.inhaleCounts + settings.exhaleCounts)
+        let inhalePeriod = secondsPerBreathCount * Double(settings.inhaleCounts)
+        let breathTime = settings.resetBreathingOnMinute
+            ? ClockRhythmMath.positiveRemainder(unix, 60) : unix
+        if let start = ClockRhythmMath.eventIndex(atUnixSeconds: breathTime,
+                                                 period: breathPeriod),
+           let out = ClockRhythmMath.eventIndex(atUnixSeconds: breathTime - inhalePeriod,
+                                               period: breathPeriod) {
+            if settings.breathCues, let previous = lastBreathStartIndex, start > previous {
+                breathVoice.start(frequency: 680, seconds: 0.05,
+                                  volume: peakAmplitude * 0.20, sampleRate: sampleRate)
+            } else if settings.breathCues, let previous = lastBreathOutIndex, out > previous {
+                breathVoice.start(frequency: 420, seconds: 0.065,
+                                  volume: peakAmplitude * 0.18, sampleRate: sampleRate)
+            }
+            lastBreathStartIndex = start
+            lastBreathOutIndex = out
+        }
+
+        let crossPeriod: Double?
+        switch settings.crossMode {
+        case .off: crossPeriod = nil
+        case .grouped:
+            crossPeriod = secondsPerQuarter * Double(settings.crossGroup)
+        case .ratio:
+            crossPeriod = secondsPerQuarter * Double(settings.ratioDuration) /
+                Double(settings.ratioPulses)
+        }
+        if let crossPeriod,
+           let cross = ClockRhythmMath.eventIndex(atUnixSeconds: unix, period: crossPeriod) {
+            if let previous = lastCrossIndex, cross > previous {
+                crossVoice.start(frequency: 780, seconds: 0.012,
+                                 volume: peakAmplitude * 0.26, sampleRate: sampleRate)
+            }
+            lastCrossIndex = cross
         }
     }
 }

@@ -6,6 +6,7 @@ on:
     branches:
       - phase3/rea-d01-session-fade-2026-11-20
       - phase3/one-swoop-ci-2026-11-20
+      - phase4/clock-sync-supercycle-ci-2026-11-22
 
 permissions:
   contents: read

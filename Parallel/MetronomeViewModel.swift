@@ -11,6 +11,10 @@ final class MetronomeViewModel: ObservableObject {
     @Published var gain = 0.65
     var mixerLevel = 1.0
     @Published var boostedClicks = false
+    @Published var clockSettings = ClockRhythmSettings()
+    var minuteAnalysis: MinuteRhythmAnalysis? {
+        ClockRhythmMath.analyze(bpm: bpm, settings: clockSettings)
+    }
     @Published private(set) var isPlaying = false
 
     private let engine: MetronomeEngineProtocol
@@ -25,6 +29,18 @@ final class MetronomeViewModel: ObservableObject {
     init(engine: MetronomeEngineProtocol, coordinator: AudioSessionCoordinator) {
         self.engine = engine
         self.coordinator = coordinator
+        if let data = UserDefaults.standard.data(forKey: "metronome.clockSettings.v1"),
+           let decoded = try? JSONDecoder().decode(ClockRhythmSettings.self, from: data),
+           decoded.isValid {
+            clockSettings = decoded
+        }
+        if let saved = UserDefaults.standard.object(forKey: "metronome.bpm.v1") as? Double,
+           BeatFrameScheduler.bpmRange.contains(saved), saved.isFinite {
+            bpm = saved
+        }
+        // Init is always stopped, so no player/audio session is touched.
+        try? engine.setBPM(bpm)
+        try? engine.setClockSettings(clockSettings)
         coordinator.onStateChange = { [weak self] state in
             self?.state = state
             self?.refreshMetronomeState()
@@ -49,6 +65,7 @@ final class MetronomeViewModel: ObservableObject {
         if coordinator.userRequestedPlayback {
             coordinator.stop()
         } else {
+            clockSettings.sessionStartUnixSeconds = Date().timeIntervalSince1970
             applySettings()
             guard errorMessage == nil else { return }
             coordinator.start()
@@ -69,6 +86,32 @@ final class MetronomeViewModel: ObservableObject {
                 }
             } else {
                 try engine.setBPM(bpm)
+            }
+            errorMessage = nil
+            UserDefaults.standard.set(bpm, forKey: "metronome.bpm.v1")
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        refreshMetronomeState()
+    }
+
+    func applyClockSettings() {
+        guard clockSettings.isValid else {
+            errorMessage = "Unsupported clock, meter, or breathing settings."
+            return
+        }
+        do {
+            if coordinator.userRequestedPlayback && state == .active {
+                // Only the metronome PCM source is rebuilt; video and
+                // psychoacoustic transport remain untouched.
+                try coordinator.reconfigureMetronome {
+                    try self.engine.setClockSettings(self.clockSettings)
+                }
+            } else {
+                try engine.setClockSettings(clockSettings)
+            }
+            if let data = try? JSONEncoder().encode(clockSettings) {
+                UserDefaults.standard.set(data, forKey: "metronome.clockSettings.v1")
             }
             errorMessage = nil
         } catch {
@@ -109,5 +152,10 @@ final class MetronomeViewModel: ObservableObject {
         refreshMetronomeState()
     }
 
-    private func applySettings() { applyTempo(); applyGain(); applyClickBoost() }
+    private func applySettings() {
+        applyTempo()
+        applyClockSettings()
+        applyGain()
+        applyClickBoost()
+    }
 }

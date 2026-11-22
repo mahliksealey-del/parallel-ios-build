@@ -5,6 +5,7 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 import PsychoacousticDSP
+import MetronomeEngine
 
 struct ContentView: View {
     @ObservedObject var model: MetronomeViewModel
@@ -76,27 +77,8 @@ struct ContentView: View {
                     }
                 }
                 if metronomeExpanded {
-                Section("Tempo") {
-                    HStack {
-                        Text("\(Int(model.bpm)) BPM").font(.title2.monospacedDigit().bold())
-                        Spacer()
-                        Stepper("Tempo", value: $model.bpm, in: 30...300, step: 1)
-                            .labelsHidden()
-                            .disabled(!model.canEditTempo)
-                    }
-                    Slider(
-                        value: $model.bpm, in: 30...300, step: 1,
-                        onEditingChanged: { editing in
-                            isDraggingTempo = editing
-                            if !editing { model.applyTempo() }
-                        }
-                    )
-                        .disabled(!model.canEditTempo)
-                        .accessibilityLabel("Tempo")
-                        .accessibilityValue("\(Int(model.bpm)) beats per minute")
-                }
-                .onChange(of: model.bpm) { _ in
-                    if !isDraggingTempo { model.applyTempo() }
+                Section("Clock Sync · Breathing") {
+                    MetronomeClockPanel(model: model)
                 }
 
                 Section("Metronome level") {
@@ -116,18 +98,6 @@ struct ContentView: View {
                 }
                 .onChange(of: model.boostedClicks) { _ in model.applyClickBoost() }
 
-                Section("Metronome playback") {
-                    Button(model.isPlaying ? "Stop Metronome" : "Start Metronome") {
-                        model.togglePlayback()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .frame(maxWidth: .infinity)
-                    .accessibilityIdentifier("metronome-transport")
-                    LabeledContent("Status", value: model.isPlaying
-                        ? "Metronome playing"
-                        : (model.state == .interrupted ? "Interrupted" : "Metronome stopped"))
-                    Text(model.routeDescription).font(.footnote).foregroundStyle(.secondary)
-                }
 
                 }
 
@@ -809,6 +779,299 @@ private struct PsychoacousticSoundPresetEditor: View {
                 }
             }
         }
+    }
+}
+
+/// Phase 4: concise controls first; optional analytical and cross-rhythm
+/// tools stay behind a separate Advanced view. One shared model owns audio.
+private struct MetronomeClockPanel: View {
+    @ObservedObject var model: MetronomeViewModel
+    @State private var tempoText = ""
+    @State private var metronomePresetName = ""
+    @State private var editingTempo = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Picker("Metronome view", selection: $model.clockSettings.advancedView) {
+                Text("Simple").tag(false)
+                Text("Advanced").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("p4-simple-advanced")
+            Toggle("Sync metronome to real-world clock",
+                   isOn: $model.clockSettings.clockSync)
+                .accessibilityIdentifier("p4-clock-sync-toggle")
+            Text("When enabled, Start joins the existing 24-hour clock grid. Time continues while stopped. Minute :00 has its own distinct chime.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                VStack(alignment: .leading) {
+                    Text("Tempo").font(.subheadline.bold())
+                    Text(String(format: "%.2f BPM", model.bpm))
+                        .font(.title3.monospacedDigit())
+                }
+                Spacer()
+                Stepper("BPM", value: $model.bpm, in: 30...300, step: 0.5)
+                    .labelsHidden()
+            }
+            HStack {
+                Slider(value: $model.bpm, in: 30...300, step: 0.5,
+                       onEditingChanged: { editing in
+                           editingTempo = editing
+                           if !editing { model.applyTempo() }
+                       })
+                    .accessibilityLabel("Metronome tempo")
+                TextField("Custom BPM", text: $tempoText)
+                    .textFieldStyle(.roundedBorder)
+                    .keyboardType(.decimalPad)
+                    .frame(width: 83)
+                    .accessibilityIdentifier("p4-custom-bpm")
+                Button("Set") {
+                    guard let value = Double(tempoText), value.isFinite,
+                          (30...300).contains(value) else { return }
+                    model.bpm = value
+                    model.applyTempo()
+                }
+                .buttonStyle(.bordered)
+            }
+            HStack(spacing: 15) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Time signature").font(.caption.bold())
+                    HStack {
+                        Picker("Numerator", selection: $model.clockSettings.meterNumerator) {
+                            ForEach(1...32, id: \.self) { n in
+                                Text("\(n)").tag(n)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        Text("/")
+                        Picker("Denominator", selection: $model.clockSettings.meterDenominator) {
+                            ForEach([1,2,4,8,16,32], id: \.self) { n in
+                                Text("\(n)").tag(n)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Breathing counts").font(.caption.bold())
+                    HStack {
+                        Stepper("In \(model.clockSettings.inhaleCounts)",
+                                value: $model.clockSettings.inhaleCounts, in: 1...256)
+                            .labelsHidden()
+                        Text("In \(model.clockSettings.inhaleCounts)")
+                            .foregroundStyle(.blue).font(.caption.bold())
+                        Stepper("Out \(model.clockSettings.exhaleCounts)",
+                                value: $model.clockSettings.exhaleCounts, in: 1...256)
+                            .labelsHidden()
+                        Text("Out \(model.clockSettings.exhaleCounts)")
+                            .foregroundStyle(.teal).font(.caption.bold())
+                    }
+                }
+            }
+            .accessibilityIdentifier("p4-meter-breath")
+            if let summary = model.minuteAnalysis {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("60-SECOND ANALYSIS").font(.caption.bold())
+                        .foregroundStyle(.secondary)
+                    LabeledContent("Measures", value:
+                        "\(summary.fullMeasures) + \(number(summary.remainingMeterBeats)) beats")
+                    LabeledContent("Breathing groups", value:
+                        "\(summary.fullBreathingGroups) + \(number(summary.remainingBreathCounts)) counts")
+                    LabeledContent("One breathing group", value:
+                        String(format: "%.2f sec", summary.breathingSeconds))
+                    if let alignment = summary.masterAlignmentMinutes {
+                        LabeledContent("Full clock alignment", value:
+                            "Every \(alignment) min")
+                    } else {
+                        LabeledContent("Full clock alignment", value:
+                            "Beyond 24-hour forecast")
+                    }
+                    Text("Minute marker location depends on the continuous clock phase; live prediction appears below.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(10)
+                .background(Color.secondary.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+            if model.clockSettings.clockSync {
+                TimelineView(.periodic(from: .now, by: 0.1)) { timeline in
+                    minuteClock(at: timeline.date)
+                }
+                .accessibilityIdentifier("p4-live-minute-clock")
+            } else {
+                Text("Clock Sync off — original start-relative metronome is active.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Button(model.isPlaying ? "Stop Metronome" : "Start Clock-Synced Metronome") {
+                model.togglePlayback()
+            }
+            .buttonStyle(.borderedProminent)
+            .frame(maxWidth: .infinity)
+            .accessibilityIdentifier("metronome-transport")
+            LabeledContent("Status",
+                value: model.isPlaying ? "Metronome playing" :
+                    (model.state == .interrupted ? "Interrupted" : "Metronome stopped"))
+            Text(model.routeDescription)
+                .font(.caption).foregroundStyle(.secondary)
+            if model.clockSettings.advancedView {
+                advancedControls
+            }
+        }
+        .onChange(of: model.clockSettings) { _ in model.applyClockSettings() }
+        .onChange(of: model.bpm) { _ in
+            if !editingTempo { model.applyTempo() }
+        }
+    }
+
+    @ViewBuilder
+    private var advancedControls: some View {
+        Divider()
+        Text("Advanced · Rhythm & Supercycle").font(.headline)
+        Picker("Breathing count unit", selection: $model.clockSettings.countDenominator) {
+            ForEach([1,2,4,8,16,32], id: \.self) { value in
+                Text("1/\(value) note").tag(value)
+            }
+        }
+        Toggle("Reset breathing on each minute (opt-in)",
+               isOn: $model.clockSettings.resetBreathingOnMinute)
+        Toggle("Inhale/exhale transition tones", isOn: $model.clockSettings.breathCues)
+        Toggle("Higher-timeframe alignment tones", isOn: $model.clockSettings.supercycleCues)
+        Toggle("Distinct minute click", isOn: $model.clockSettings.markerEnabled)
+        Slider(value: $model.clockSettings.markerVolume, in: 0...1)
+            .accessibilityLabel("Minute marker level")
+        LabeledContent("Minute marker volume",
+            value: "\(Int(model.clockSettings.markerVolume * 100))%")
+        Picker("Minute marker sound", selection: $model.clockSettings.markerVariant) {
+            Text("High bell").tag(0)
+            Text("Bright tick").tag(1)
+            Text("Low chime").tag(2)
+        }
+        Picker("Additional rhythm", selection: $model.clockSettings.crossMode) {
+            Text("None").tag(CrossRhythmMode.off)
+            Text("Grouped polymeter").tag(CrossRhythmMode.grouped)
+            Text("Ratio polyrhythm").tag(CrossRhythmMode.ratio)
+        }
+        if model.clockSettings.crossMode == .grouped {
+            Stepper("Secondary group: \(model.clockSettings.crossGroup) quarter beats",
+                value: $model.clockSettings.crossGroup, in: 2...64)
+        } else if model.clockSettings.crossMode == .ratio {
+            Stepper("Pulses: \(model.clockSettings.ratioPulses)",
+                value: $model.clockSettings.ratioPulses, in: 2...16)
+            Stepper("Over quarter beats: \(model.clockSettings.ratioDuration)",
+                value: $model.clockSettings.ratioDuration, in: 2...32)
+        }
+        Picker("Higher-timeframe block", selection: $model.clockSettings.groupingMinutes) {
+            ForEach([5,15,30,60], id: \.self) { n in Text("\(n) minutes").tag(n) }
+        }
+        Picker("Block origin", selection: $model.clockSettings.blockAnchor) {
+            Text("Real clock").tag(MinuteBlockAnchor.clock)
+            Text("Session Start").tag(MinuteBlockAnchor.session)
+        }
+        Toggle("UTC (Zulu) clock display", isOn: $model.clockSettings.showUTC)
+        if let summary = model.minuteAnalysis {
+            LabeledContent("Combined musical supercycle",
+                value: summary.supercycleBeats.map {
+                    String(format: "%.2f quarter beats", $0)
+                } ?? "Not representable")
+            LabeledContent("60-sec meter pulses",
+                           value: String(format: "%.2f", summary.beatsPerMinute))
+        }
+        TimelineView(.periodic(from: .now, by: 0.1)) { timeline in
+            advancedLive(at: timeline.date)
+        }
+        Text("Clock time is a mathematical reference. Built-in speaker, wired and Bluetooth output have different unmeasured latency. NTP correction is not required for offline use.")
+            .font(.caption).foregroundStyle(.secondary)
+    }
+
+    private func minuteClock(at date: Date) -> some View {
+        let unix = date.timeIntervalSince1970
+        let current = ClockRhythmMath.minuteClock(at: unix)
+        let boundary = (floor(unix / 60) + 1) * 60
+        let beat = ClockRhythmMath.position(atUnixSeconds: boundary, bpm: model.bpm,
+                                            settings: model.clockSettings)
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Text(clockLabel(date))
+                    .font(.title2.monospacedDigit().bold())
+                Spacer()
+                Text(model.clockSettings.showUTC ? "UTC" : "Local")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            ProgressView(value: current.elapsed, total: 60)
+                .accessibilityLabel("Current minute progress")
+            HStack {
+                Text(String(format: "%.2f sec elapsed", current.elapsed))
+                Spacer()
+                Text(String(format: "%.2f until :00", current.untilNext))
+            }
+            .font(.caption.monospacedDigit())
+            if let beat {
+                LabeledContent("Next :00", value:
+                    ClockRhythmMath.meterBeatDescription(beat.beatInMeasure))
+                LabeledContent("Breathing at :00", value:
+                    "\(beat.exhaling ? "Exhale" : "Inhale") count \(number(beat.breathCountInGroup))")
+            }
+            Text("Minute chime always follows real :00; it never restarts the meter.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func advancedLive(at date: Date) -> some View {
+        let unix = date.timeIntervalSince1970
+        let position = ClockRhythmMath.position(atUnixSeconds: unix, bpm: model.bpm,
+                                               settings: model.clockSettings)
+        let summary = model.minuteAnalysis
+        let next = summary?.masterAlignmentMinutes.flatMap {
+            ClockRhythmMath.nextAlignment(after: unix, alignmentMinutes: $0)
+        }
+        let blockLength = Double(model.clockSettings.groupingMinutes) * 60
+        let blockOrigin = model.clockSettings.blockAnchor == .session
+            ? (model.clockSettings.sessionStartUnixSeconds ?? unix) : 0
+        let blockElapsed = ClockRhythmMath.positiveRemainder(
+            max(0, unix - blockOrigin), blockLength)
+        return VStack(alignment: .leading, spacing: 6) {
+            if let position {
+                LabeledContent("Current measure",
+                    value: "\(position.measure + 1) · \(ClockRhythmMath.meterBeatDescription(position.beatInMeasure))")
+                LabeledContent("Breathing cycle",
+                    value: "\(position.breathGroup + 1) · \(position.exhaling ? "Out" : "In") \(number(position.breathCountInGroup))")
+                ProgressView(value: max(0, position.nextBreathInSeconds),
+                    total: max(1, Double(model.clockSettings.inhaleCounts + model.clockSettings.exhaleCounts)
+                        * 60 / model.bpm * 4 / Double(model.clockSettings.countDenominator)))
+                    .accessibilityLabel("Time to next breathing group")
+            }
+            if let next {
+                LabeledContent("Next full alignment",
+                    value: String(format: "%.1f sec", next))
+            }
+            LabeledContent("Minute block",
+                value: "\(Int(blockElapsed / 60) + 1) / \(model.clockSettings.groupingMinutes)")
+            ProgressView(value: blockElapsed, total: blockLength)
+                .accessibilityLabel("Higher-timeframe block position")
+        }
+        .font(.caption)
+    }
+
+    private func clockLabel(_ date: Date) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = model.clockSettings.showUTC
+            ? TimeZone(secondsFromGMT: 0)! : .current
+        let components = calendar.dateComponents([.hour, .minute, .second], from: date)
+        let ms = Int(ClockRhythmMath.positiveRemainder(
+            date.timeIntervalSince1970, 1) * 1000)
+        return String(format: "%02d:%02d:%02d.%03d",
+                      components.hour ?? 0, components.minute ?? 0,
+                      components.second ?? 0, ms)
+    }
+
+    private func number(_ value: Double) -> String {
+        if abs(value - value.rounded()) < 0.001 {
+            return String(Int(value.rounded()))
+        }
+        return String(format: "%.2f", value)
     }
 }
 
