@@ -112,6 +112,22 @@ final class MetronomeTimingTests: XCTestCase {
         XCTAssertEqual(ClockRhythmMath.eventIndex(atUnixSeconds: 38, period: 1), 38)
     }
 
+    func testMinuteBoundaryLatchNeverDuplicatesClicks() {
+        var latch = ClockBoundaryLatch()
+        XCTAssertFalse(latch.advance(to: 100))
+        XCTAssertFalse(latch.advance(to: 100))
+        XCTAssertFalse(latch.advance(to: 100))
+        XCTAssertTrue(latch.advance(to: 101))
+        XCTAssertFalse(latch.advance(to: 101))
+        XCTAssertFalse(latch.advance(to: 103)) // Missing minute: no late burst
+        XCTAssertTrue(latch.advance(to: 104))
+        XCTAssertFalse(latch.advance(to: 100))
+        XCTAssertTrue(latch.advance(to: 101))
+        var sentinel = ClockBoundaryLatch()
+        XCTAssertFalse(sentinel.advance(to: Int64.max))
+        XCTAssertFalse(sentinel.advance(to: Int64.max))
+    }
+
     func testMinuteBoundaryCrossingExactly59ToZero() {
         let before = ClockRhythmMath.minuteClock(at: 59.999)
         let after = ClockRhythmMath.minuteClock(at: 60.0)
@@ -169,12 +185,15 @@ final class MetronomeTimingTests: XCTestCase {
         s.groupCueVolume = 0.1
         s.sessionStartUnixSeconds = nil
         let preset = MetronomeClockPreset(id: UUID(), name: "Clock Practice",
-                                           bpm: 82.5, settings: s)
+                                           bpm: 82.5, settings: s,
+                                           gain: 0.7, boostedClicks: true)
         XCTAssertTrue(preset.isValid)
         let data = try JSONEncoder().encode(preset)
         let restored = try JSONDecoder().decode(MetronomeClockPreset.self, from: data)
         XCTAssertEqual(restored.id, preset.id)
         XCTAssertEqual(restored.bpm, 82.5, accuracy: 0.000001)
+        XCTAssertEqual(restored.gain, 0.7, accuracy: 0.000001)
+        XCTAssertTrue(restored.boostedClicks)
         XCTAssertEqual(restored.settings.breathCueVolume, 0.15, accuracy: 0.000001)
         let json = String(decoding: data, as: UTF8.self)
         XCTAssertFalse(json.contains("psychoacoustic"))
@@ -215,6 +234,8 @@ final class MetronomeTimingTests: XCTestCase {
         XCTAssertNil(ClockRhythmMath.eventIndex(atUnixSeconds: .nan, period: 1))
         XCTAssertNil(ClockRhythmMath.eventIndex(atUnixSeconds: 5, period: 0))
         XCTAssertNil(ClockRhythmMath.analyze(bpm: .nan, settings: settings))
+        XCTAssertNil(ClockRhythmMath.analyze(bpm: 82.5003, settings: settings)?
+                         .masterAlignmentMinutes)
     }
 
 }

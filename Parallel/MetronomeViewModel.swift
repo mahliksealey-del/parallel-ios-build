@@ -51,9 +51,16 @@ final class MetronomeViewModel: ObservableObject {
            savedClockPresets.contains(where: { $0.id == id }) {
             selectedClockPresetID = id
         }
+        if let g = UserDefaults.standard.object(forKey: "metronome.gain.v1") as? Double,
+           g.isFinite, (0...1).contains(g) { gain = g }
+        if UserDefaults.standard.object(forKey: "metronome.clickBoost.v1") != nil {
+            boostedClicks = UserDefaults.standard.bool(forKey: "metronome.clickBoost.v1")
+        }
         // Init is always stopped, so no player/audio session is touched.
         try? engine.setBPM(bpm)
         try? engine.setClockSettings(clockSettings)
+        try? engine.setGain(Float(gain))
+        try? engine.setBoostedClicks(boostedClicks)
         coordinator.onStateChange = { [weak self] state in
             self?.state = state
             self?.refreshMetronomeState()
@@ -153,7 +160,9 @@ final class MetronomeViewModel: ObservableObject {
             } else {
                 try engine.setClockSettings(clockSettings)
             }
-            if let data = try? JSONEncoder().encode(clockSettings) {
+            var persisted = clockSettings
+            persisted.sessionStartUnixSeconds = nil
+            if let data = try? JSONEncoder().encode(persisted) {
                 UserDefaults.standard.set(data, forKey: "metronome.clockSettings.v1")
             }
             errorMessage = nil
@@ -164,8 +173,12 @@ final class MetronomeViewModel: ObservableObject {
     }
 
     func applyGain() {
-        do { try engine.setGain(Float(gain * mixerLevel)) }
-        catch { errorMessage = error.localizedDescription }
+        do {
+            try engine.setGain(Float(gain * mixerLevel))
+            UserDefaults.standard.set(gain, forKey: "metronome.gain.v1")
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     func applyClickBoost() {
@@ -181,6 +194,7 @@ final class MetronomeViewModel: ObservableObject {
                 try engine.setBoostedClicks(boostedClicks)
             }
             errorMessage = nil
+            UserDefaults.standard.set(boostedClicks, forKey: "metronome.clickBoost.v1")
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -201,7 +215,8 @@ final class MetronomeViewModel: ObservableObject {
         }
         let trimmed = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
         let preset = MetronomeClockPreset(
-            id: UUID(), name: trimmed, bpm: bpm, settings: currentClockPresetSettings)
+            id: UUID(), name: trimmed, bpm: bpm, settings: currentClockPresetSettings,
+            gain: gain, boostedClicks: boostedClicks)
         guard preset.isValid else {
             errorMessage = "Choose a name and valid tempo/meter/breathing settings."
             return
@@ -219,6 +234,8 @@ final class MetronomeViewModel: ObservableObject {
             return
         }
         bpm = preset.bpm
+        gain = preset.gain
+        boostedClicks = preset.boostedClicks
         clockSettings = preset.settings
         selectedClockPresetID = id
         applySettings()
@@ -233,7 +250,8 @@ final class MetronomeViewModel: ObservableObject {
         }
         let updated = MetronomeClockPreset(
             id: id, name: savedClockPresets[index].name,
-            bpm: bpm, settings: currentClockPresetSettings)
+            bpm: bpm, settings: currentClockPresetSettings,
+            gain: gain, boostedClicks: boostedClicks)
         guard updated.isValid else {
             errorMessage = "Invalid metronome settings; preset unchanged."
             return

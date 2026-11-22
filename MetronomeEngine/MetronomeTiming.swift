@@ -223,8 +223,12 @@ public enum ClockRhythmMath {
         }
         let cycleTicks = cycleLengthTicks(settings: settings)
         let bpmMilli = Int64((bpm * 1_000).rounded())
+        let isExactMillibpm = abs(Double(bpmMilli) / 1_000 - bpm) < 0.000000001
         var alignment: Int64?
-        if let cycleTicks, let modulus = multiplied(cycleTicks, 1_000),
+        // A rounded decimal must never be advertised as an *exact*
+        // recurrence. Above 3 decimal places we decline to predict one.
+        if isExactMillibpm, let cycleTicks,
+           let modulus = multiplied(cycleTicks, 1_000),
            let num = multiplied(bpmMilli, ticksPerQuarter), num > 0 {
             let cycleMinutes = modulus / gcd(modulus, num)
             if cycleMinutes > 0 && cycleMinutes <= forecastMinutes {
@@ -316,23 +320,44 @@ public enum ClockRhythmMath {
 
 /// Metronome-specific saved configuration. Deliberately excludes the three
 /// AVPlayers, psychoacoustic presets, session timer and playback status.
+/// One-shot boundary latch used by the actual PCM renderer. Repeated samples
+/// inside the same minute do not produce duplicate marker attacks. The first
+/// observed minute primes the latch rather than playing a spurious click.
+public struct ClockBoundaryLatch {
+    private var lastIndex: Int64?
+
+    public init() {}
+
+    public mutating func advance(to index: Int64) -> Bool {
+        defer { lastIndex = index }
+        guard let previous = lastIndex else { return false }
+        return previous != Int64.max && index == previous + 1
+    }
+}
+
 public struct MetronomeClockPreset: Codable, Identifiable {
     public let id: UUID
     public let name: String
     public let bpm: Double
+    public let gain: Double
+    public let boostedClicks: Bool
     public let settings: ClockRhythmSettings
 
-    public init(id: UUID, name: String, bpm: Double, settings: ClockRhythmSettings) {
+    public init(id: UUID, name: String, bpm: Double, settings: ClockRhythmSettings,
+                gain: Double = 0.65, boostedClicks: Bool = false) {
         self.id = id
         self.name = name
         self.bpm = bpm
         self.settings = settings
+        self.gain = gain
+        self.boostedClicks = boostedClicks
     }
 
     public var isValid: Bool {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
           && name.count <= 80 && bpm.isFinite
           && BeatFrameScheduler.bpmRange.contains(bpm)
+          && gain.isFinite && (0...1).contains(gain)
           && settings.isValid
     }
 }

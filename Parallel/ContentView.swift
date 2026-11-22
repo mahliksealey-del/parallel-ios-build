@@ -806,7 +806,7 @@ private struct MetronomeClockPanel: View {
             HStack {
                 VStack(alignment: .leading) {
                     Text("Tempo").font(.subheadline.bold())
-                    Text(String(format: "%.2f BPM", model.bpm))
+                    Text(String(format: "%.3f BPM", model.bpm))
                         .font(.title3.monospacedDigit())
                 }
                 Spacer()
@@ -828,45 +828,33 @@ private struct MetronomeClockPanel: View {
                 Button("Set") {
                     guard let value = Double(tempoText), value.isFinite,
                           (30...300).contains(value) else { return }
-                    model.bpm = value
-                    model.applyTempo()
+                    // onChange applies it once; do not rebuild PCM twice.
+                    model.bpm = (value * 1_000).rounded() / 1_000
                 }
                 .buttonStyle(.bordered)
             }
-            HStack(spacing: 15) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Time signature").font(.caption.bold())
-                    HStack {
-                        Picker("Numerator", selection: $model.clockSettings.meterNumerator) {
-                            ForEach(1...32, id: \.self) { n in
-                                Text("\(n)").tag(n)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        Text("/")
-                        Picker("Denominator", selection: $model.clockSettings.meterDenominator) {
-                            ForEach([1,2,4,8,16,32], id: \.self) { n in
-                                Text("\(n)").tag(n)
-                            }
-                        }
-                        .pickerStyle(.menu)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Time signature").font(.subheadline.bold())
+                    Spacer()
+                    Picker("Numerator", selection: $model.clockSettings.meterNumerator) {
+                        ForEach(1...32, id: \.self) { n in Text("\(n)").tag(n) }
                     }
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Breathing counts").font(.caption.bold())
-                    HStack {
-                        Stepper("In \(model.clockSettings.inhaleCounts)",
-                                value: $model.clockSettings.inhaleCounts, in: 1...256)
-                            .labelsHidden()
-                        Text("In \(model.clockSettings.inhaleCounts)")
-                            .foregroundStyle(.blue).font(.caption.bold())
-                        Stepper("Out \(model.clockSettings.exhaleCounts)",
-                                value: $model.clockSettings.exhaleCounts, in: 1...256)
-                            .labelsHidden()
-                        Text("Out \(model.clockSettings.exhaleCounts)")
-                            .foregroundStyle(.teal).font(.caption.bold())
+                    .pickerStyle(.menu)
+                    Text("/")
+                    Picker("Denominator", selection: $model.clockSettings.meterDenominator) {
+                        ForEach([1,2,4,8,16,32], id: \.self) { n in
+                            Text("\(n)").tag(n)
+                        }
                     }
+                    .pickerStyle(.menu)
                 }
+                Stepper("Breathe in · \(model.clockSettings.inhaleCounts) counts",
+                    value: $model.clockSettings.inhaleCounts, in: 1...256)
+                    .tint(.blue)
+                Stepper("Breathe out · \(model.clockSettings.exhaleCounts) counts",
+                    value: $model.clockSettings.exhaleCounts, in: 1...256)
+                    .tint(.teal)
             }
             .accessibilityIdentifier("p4-meter-breath")
             if let summary = model.minuteAnalysis {
@@ -884,7 +872,7 @@ private struct MetronomeClockPanel: View {
                             "Every \(alignment) min")
                     } else {
                         LabeledContent("Full clock alignment", value:
-                            "Beyond 24-hour forecast")
+                            "No exact recurrence forecast")
                     }
                     Text("Minute marker location depends on the continuous clock phase; live prediction appears below.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -1061,7 +1049,7 @@ private struct MetronomeClockPanel: View {
                 LabeledContent("Next :00", value:
                     ClockRhythmMath.meterBeatDescription(beat.beatInMeasure))
                 LabeledContent("Breathing at :00", value:
-                    "\(beat.exhaling ? "Exhale" : "Inhale") count \(number(beat.breathCountInGroup))")
+                    breathingLabel(beat))
             }
             Text("Minute chime always follows real :00; it never restarts the meter.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -1101,7 +1089,7 @@ private struct MetronomeClockPanel: View {
                 }
                 .accessibilityLabel("Current metrical beat visualization")
                 LabeledContent("Breathing cycle",
-                    value: "\(position.breathGroup + 1) · \(position.exhaling ? "Out" : "In") \(number(position.breathCountInGroup))")
+                    value: "\(position.breathGroup + 1) · \(breathingLabel(position))")
                 let totalCounts = Double(
                     model.clockSettings.inhaleCounts + model.clockSettings.exhaleCounts)
                 ProgressView(value: max(0, min(totalCounts,
@@ -1131,6 +1119,16 @@ private struct MetronomeClockPanel: View {
         return String(format: "%02d:%02d:%02d.%03d",
                       components.hour ?? 0, components.minute ?? 0,
                       components.second ?? 0, ms)
+    }
+
+    private func breathingLabel(_ position: RhythmPosition) -> String {
+        // Position counts are cycle-relative; labels should count *within*
+        // inhale or exhale instead (e.g. 4-in/8-out, cycle count 7 =
+        // exhale count 3, not "exhale count 7").
+        let phaseCount = position.exhaling
+            ? position.breathCountInGroup - Double(model.clockSettings.inhaleCounts)
+            : position.breathCountInGroup
+        return "\(position.exhaling ? "Exhale" : "Inhale") count \(number(phaseCount))"
     }
 
     private func number(_ value: Double) -> String {

@@ -176,9 +176,8 @@ private final class RenderState: @unchecked Sendable {
     private let settings: ClockRhythmSettings
     private let anchorWallSeconds: Double
     private let anchorHostSeconds: Double
-    private var renderedFrames: UInt64 = 0
     private var lastBeatIndex: Int64?
-    private var lastMinuteIndex: Int64?
+    private var minuteLatch = ClockBoundaryLatch()
     private var lastBreathStartIndex: Int64?
     private var lastBreathOutIndex: Int64?
     private var lastCrossIndex: Int64?
@@ -211,7 +210,10 @@ private final class RenderState: @unchecked Sendable {
     func render(timestamp: UnsafePointer<AudioTimeStamp>, frameCount: AVAudioFrameCount,
                 audioBufferList: UnsafeMutablePointer<AudioBufferList>) {
         let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
-        let validHostTime = timestamp.pointee.mHostTime > 0
+        // Core Audio explicitly marks which timestamp fields are valid.
+        // Nonzero mHostTime alone is not proof of a valid timestamp.
+        let validHostTime = timestamp.pointee.mFlags.contains(.hostTimeValid)
+            && timestamp.pointee.mHostTime > 0
         let startUnix: Double
         if settings.clockSync && validHostTime {
             // AVAudioSourceNode delivers the buffer's host timeline. Convert
@@ -219,10 +221,12 @@ private final class RenderState: @unchecked Sendable {
             let hostSeconds = AVAudioTime.seconds(forHostTime: timestamp.pointee.mHostTime)
             startUnix = anchorWallSeconds + (hostSeconds - anchorHostSeconds)
         } else {
-            // Fallback covers simulators/routes that do not supply mHostTime.
-            // It is sample-continuous but its absolute initial latency is
-            // less certain than a valid host timestamp; diagnostics note this.
-            startUnix = anchorWallSeconds + Double(renderedFrames) / sampleRate
+            // Host time was not supplied for this audio callback. Use a
+            // monotonic host reading (not a stale start-time sample counter)
+            // so startup delays do not displace the entire clock grid.
+            // This remains uncalibrated for hardware output buffering.
+            let hostSeconds = AVAudioTime.seconds(forHostTime: mach_absolute_time())
+            startUnix = anchorWallSeconds + (hostSeconds - anchorHostSeconds)
         }
         for frame in 0..<Int(frameCount) {
             if settings.clockSync {
@@ -263,7 +267,6 @@ private final class RenderState: @unchecked Sendable {
                 buffer.mData?.assumingMemoryBound(to: Float.self)[frame] = sample
             }
         }
-        renderedFrames &+= UInt64(frameCount)
     }
 
     private func renderClockEvents(atUnixSeconds unix: Double) {
@@ -271,12 +274,14 @@ private final class RenderState: @unchecked Sendable {
                                                   period: secondsPerNotePulse),
               let minute = ClockRhythmMath.eventIndex(atUnixSeconds: unix, period: 60)
         else { return }
-        let minuteCrossed = lastMinuteIndex.map { minute == $0 + 1 } ?? false
+        let minuteCrossed = minuteLatch.advance(to: minute)
+        let masterBoundary = minuteCrossed && settings.supercycleCues
+            && fullAlignmentMinutes.map { minute % $0 == 0 } == true
         if let previous = lastBeatIndex, beat > previous {
             let accent = beat % Int64(settings.meterNumerator) == 0
             // The unique minute chime wins when musical and real-world
             // boundaries overlap. Do not stack two full-power transients.
-            let beatGain = (minuteCrossed && settings.markerEnabled) ? 0.25 : 1.0
+            let beatGain: Double = (minuteCrossed && (settings.markerEnabled || masterBoundary)) ? 0.25 : 1.0
             beatVoice.start(frequency: accent ? 1_600 : 1_050,
                             seconds: 0.018, volume: peakAmplitude * beatGain,
                             sampleRate: sampleRate)
@@ -284,19 +289,18 @@ private final class RenderState: @unchecked Sendable {
         lastBeatIndex = beat
 
         if minuteCrossed {
-            if settings.markerEnabled {
-                let master = settings.supercycleCues
-                    && fullAlignmentMinutes.map { minute % $0 == 0 } == true
-                let frequency: Double = master ? 2_100 :
+            if settings.markerEnabled || masterBoundary {
+                let frequency: Double = masterBoundary ? 2_100 :
                     (settings.markerVariant == 0 ? 1_830 :
                      (settings.markerVariant == 1 ? 2_500 : 1_380))
-                minuteVoice.start(frequency: frequency, seconds: master ? 0.085 : 0.065,
-                                  volume: peakAmplitude * settings.markerVolume,
+                let level = settings.markerEnabled
+                    ? settings.markerVolume : settings.groupCueVolume
+                minuteVoice.start(frequency: frequency,
+                                  seconds: masterBoundary ? 0.085 : 0.065,
+                                  volume: peakAmplitude * level,
                                   sampleRate: sampleRate)
             }
          }
-        lastMinuteIndex = minute
-
         // Higher-timeframe marker may be anchored either to real-world
         // clock blocks or the particular session's Play instant.
         let groupOrigin = settings.blockAnchor == .session
