@@ -147,6 +147,30 @@ public struct RhythmPosition: Equatable {
     public let nextBreathInSeconds: Double
 }
 
+/// Human-readable indices *inside the current wall-clock minute*.
+/// These deliberately do not expose the Unix-epoch measure and breath IDs.
+/// A partially completed group at either edge counts as a group encountered
+/// in the minute. For example, 90 BPM and 4+8 breath counts displays 8
+/// groups touched (7 complete plus the partial eighth).
+public struct MinuteWindowPosition: Equatable {
+    public let groupNumber: Int
+    public let totalGroups: Int
+    public let measureNumber: Int
+    public let totalMeasures: Int
+    public let elapsedSeconds: Double
+    public let secondsRemaining: Double
+}
+
+public struct MinuteBoundarySounds: Equatable {
+    public let ordinaryMinute: Bool
+    public let masterSuccess: Bool
+
+    public init(ordinaryMinute: Bool, masterSuccess: Bool) {
+        self.ordinaryMinute = ordinaryMinute
+        self.masterSuccess = masterSuccess
+    }
+}
+
 public struct MinuteRhythmAnalysis {
     public let beatsPerMinute: Double
     public let fullMeasures: Int64
@@ -169,6 +193,68 @@ public enum ClockRhythmMath {
         guard x.isFinite, m.isFinite, m > 0 else { return 0 }
         let r = x.truncatingRemainder(dividingBy: m)
         return r < 0 ? r + m : r
+    }
+
+    /// Minute-window indices are phase-relative to the real clock, unlike
+    /// lifetime positions generated from the Unix epoch. Both continuous
+    /// breathing and the opt-in minute-reset mode are supported.
+    public static func minuteWindow(atUnixSeconds t: Double, bpm: Double,
+                                    settings: ClockRhythmSettings) -> MinuteWindowPosition? {
+        guard t.isFinite, bpm.isFinite, BeatFrameScheduler.bpmRange.contains(bpm),
+              settings.isValid else { return nil }
+
+        let start = floor(t / 60) * 60
+        let end = start + 60
+        // This avoids including an event exactly on the next minute boundary
+        // in the preceding minute's group count.
+        let lastMoment = end.nextDown
+        let meterSeconds = 60 / bpm * 4 / Double(settings.meterDenominator) *
+            Double(settings.meterNumerator)
+        let breathSeconds = 60 / bpm * 4 / Double(settings.countDenominator) *
+            Double(settings.inhaleCounts + settings.exhaleCounts)
+
+        guard let currentBar = eventIndex(atUnixSeconds: t, period: meterSeconds),
+              let firstBar = eventIndex(atUnixSeconds: start, period: meterSeconds),
+              let lastBar = eventIndex(atUnixSeconds: lastMoment, period: meterSeconds)
+        else { return nil }
+
+        let groupStartTime = settings.resetBreathingOnMinute ? 0 : start
+        let groupCurrentTime = settings.resetBreathingOnMinute
+            ? positiveRemainder(t, 60) : t
+        let groupEndTime = settings.resetBreathingOnMinute ? Double(60).nextDown : lastMoment
+        guard let firstGroup = eventIndex(atUnixSeconds: groupStartTime, period: breathSeconds),
+              let currentGroup = eventIndex(atUnixSeconds: groupCurrentTime,
+                                           period: breathSeconds),
+              let lastGroup = eventIndex(atUnixSeconds: groupEndTime,
+                                        period: breathSeconds)
+        else { return nil }
+
+        let groupIndex = currentGroup - firstGroup + 1
+        let groupCount = lastGroup - firstGroup + 1
+        let barIndex = currentBar - firstBar + 1
+        let barCount = lastBar - firstBar + 1
+        guard groupIndex > 0, groupIndex <= groupCount,
+              barIndex > 0, barIndex <= barCount,
+              groupCount <= Int64(Int.max), barCount <= Int64(Int.max)
+        else { return nil }
+
+        let clock = minuteClock(at: t)
+        return MinuteWindowPosition(
+            groupNumber: Int(groupIndex), totalGroups: Int(groupCount),
+            measureNumber: Int(barIndex), totalMeasures: Int(barCount),
+            elapsedSeconds: clock.elapsed, secondsRemaining: clock.untilNext
+        )
+    }
+
+    /// A minute click and a master "GO" cue are *separate* audible events,
+    /// including on minutes where the two rhythms realign exactly.
+    public static func boundarySounds(minuteIndex: Int64,
+                                      settings: ClockRhythmSettings,
+                                      fullAlignmentMinutes: Int64?) -> MinuteBoundarySounds {
+        let master = settings.supercycleCues &&
+            fullAlignmentMinutes.map { $0 > 0 && minuteIndex % $0 == 0 } == true
+        return MinuteBoundarySounds(ordinaryMinute: settings.markerEnabled,
+                                    masterSuccess: master)
     }
 
     public static func minuteClock(at unixSeconds: Double) -> (elapsed: Double, untilNext: Double) {

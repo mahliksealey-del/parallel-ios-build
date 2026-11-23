@@ -301,6 +301,9 @@ struct ContentView: View {
                     }
                 }
             }
+            // A numeric BPM keyboard should never pin the Form to a focused
+            // text field while live clock labels keep refreshing.
+            .scrollDismissesKeyboard(.interactively)
             // One observer stays active whether the psychoacoustic accordion
             // is expanded or the Mini Mixer sheet is showing.
             .onChange(of: psychoacoustic.whiteNoise) { _ in psychoacoustic.applyLayers() }
@@ -789,6 +792,7 @@ private struct MetronomeClockPanel: View {
     @State private var tempoText = ""
     @State private var metronomePresetName = ""
     @State private var editingTempo = false
+    @FocusState private var tempoFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -823,6 +827,9 @@ private struct MetronomeClockPanel: View {
                 TextField("Custom BPM", text: $tempoText)
                     .textFieldStyle(.roundedBorder)
                     .keyboardType(.decimalPad)
+                    .focused($tempoFocused)
+                    .submitLabel(.done)
+                    .onSubmit { tempoFocused = false }
                     .frame(width: 83)
                     .accessibilityIdentifier("p4-custom-bpm")
                 Button("Set") {
@@ -830,6 +837,7 @@ private struct MetronomeClockPanel: View {
                           (30...300).contains(value) else { return }
                     // onChange applies it once; do not rebuild PCM twice.
                     model.bpm = (value * 1_000).rounded() / 1_000
+                    tempoFocused = false
                 }
                 .buttonStyle(.bordered)
             }
@@ -882,15 +890,17 @@ private struct MetronomeClockPanel: View {
                 .clipShape(RoundedRectangle(cornerRadius: 10))
             }
             if model.clockSettings.clockSync {
-                TimelineView(.periodic(from: .now, by: 0.1)) { timeline in
+                TimelineView(.periodic(from: .now, by: tempoFocused ? 1.0 : 0.20)) { timeline in
                     minuteClock(at: timeline.date)
                 }
+                .transaction { $0.animation = nil }
                 .accessibilityIdentifier("p4-live-minute-clock")
             } else {
                 Text("Clock Sync off — original start-relative metronome is active.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Button(model.isPlaying ? "Stop Metronome" : "Start Clock-Synced Metronome") {
+                tempoFocused = false
                 model.togglePlayback()
             }
             .buttonStyle(.borderedProminent)
@@ -906,6 +916,13 @@ private struct MetronomeClockPanel: View {
             }
         }
         .onChange(of: model.clockSettings) { _ in model.applyClockSettings() }
+        .onChange(of: model.clockSettings.advancedView) { _ in tempoFocused = false }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { tempoFocused = false }
+            }
+        }
         .onChange(of: model.bpm) { _ in
             if !editingTempo { model.applyTempo() }
         }
@@ -972,9 +989,10 @@ private struct MetronomeClockPanel: View {
             LabeledContent("60-sec meter pulses",
                            value: String(format: "%.2f", summary.beatsPerMinute))
         }
-        TimelineView(.periodic(from: .now, by: 0.1)) { timeline in
+        TimelineView(.periodic(from: .now, by: 0.25)) { timeline in
             advancedLive(at: timeline.date)
         }
+        .transaction { $0.animation = nil }
         DisclosureGroup("My metronome presets") {
             VStack(alignment: .leading, spacing: 8) {
                 Text("These save the clock, rhythm and breathing configuration only. Video and psychoacoustic presets remain independent.")
@@ -1026,6 +1044,8 @@ private struct MetronomeClockPanel: View {
     private func minuteClock(at date: Date) -> some View {
         let unix = date.timeIntervalSince1970
         let current = ClockRhythmMath.minuteClock(at: unix)
+        let localGroup = ClockRhythmMath.minuteWindow(
+            atUnixSeconds: unix, bpm: model.bpm, settings: model.clockSettings)
         let boundary = (floor(unix / 60) + 1) * 60
         let beat = ClockRhythmMath.position(atUnixSeconds: boundary, bpm: model.bpm,
                                             settings: model.clockSettings)
@@ -1045,15 +1065,45 @@ private struct MetronomeClockPanel: View {
                 Text(String(format: "%.2f until :00", current.untilNext))
             }
             .font(.caption.monospacedDigit())
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            if let localGroup {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("Breathing group")
+                        .font(.subheadline)
+                    Spacer(minLength: 5)
+                    Text("Group \(localGroup.groupNumber) of \(localGroup.totalGroups)")
+                        .font(.subheadline.monospacedDigit().bold())
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                }
+                .accessibilityIdentifier("p4-current-minute-breathing-group")
+            }
             if let beat {
-                LabeledContent("Next :00", value:
-                    ClockRhythmMath.meterBeatDescription(beat.beatInMeasure))
-                LabeledContent("Breathing at :00", value:
-                    breathingLabel(beat))
+                HStack(spacing: 8) {
+                    Text("Next :00")
+                    Spacer(minLength: 5)
+                    Text(ClockRhythmMath.meterBeatDescription(beat.beatInMeasure))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+                .font(.caption)
+                HStack(spacing: 8) {
+                    Text("Breathing at :00")
+                    Spacer(minLength: 5)
+                    Text(breathingLabel(beat))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+                .font(.caption)
             }
             Text("Minute chime always follows real :00; it never restarts the meter.")
                 .font(.caption).foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(Color.secondary.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -1063,6 +1113,8 @@ private struct MetronomeClockPanel: View {
         let unix = date.timeIntervalSince1970
         let position = ClockRhythmMath.position(atUnixSeconds: unix, bpm: model.bpm,
                                                settings: model.clockSettings)
+        let window = ClockRhythmMath.minuteWindow(atUnixSeconds: unix, bpm: model.bpm,
+                                                   settings: model.clockSettings)
         let summary = model.minuteAnalysis
         let next = summary?.masterAlignmentMinutes.flatMap {
             ClockRhythmMath.nextAlignment(after: unix, alignmentMinutes: $0)
@@ -1074,8 +1126,23 @@ private struct MetronomeClockPanel: View {
             max(0, unix - blockOrigin), blockLength)
         return VStack(alignment: .leading, spacing: 6) {
             if let position {
-                LabeledContent("Current measure",
-                    value: "\(position.measure + 1) · \(ClockRhythmMath.meterBeatDescription(position.beatInMeasure))")
+                if let window {
+                    HStack(spacing: 8) {
+                        Text("Measure in this minute")
+                        Spacer(minLength: 6)
+                        Text("\(window.measureNumber) of \(window.totalMeasures)")
+                            .monospacedDigit().bold()
+                    }
+                    .accessibilityIdentifier("p4-current-minute-measure")
+                }
+                HStack(spacing: 8) {
+                    Text("Current beat")
+                    Spacer(minLength: 6)
+                    Text(ClockRhythmMath.meterBeatDescription(position.beatInMeasure))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 5) {
                         ForEach(0..<model.clockSettings.meterNumerator, id: \.self) { beat in
@@ -1088,8 +1155,25 @@ private struct MetronomeClockPanel: View {
                     .padding(.vertical, 5)
                 }
                 .accessibilityLabel("Current metrical beat visualization")
-                LabeledContent("Breathing cycle",
-                    value: "\(position.breathGroup + 1) · \(breathingLabel(position))")
+                if let window {
+                    HStack(spacing: 8) {
+                        Text("Breathing group this minute")
+                        Spacer(minLength: 6)
+                        Text("\(window.groupNumber) of \(window.totalGroups)")
+                            .monospacedDigit().bold()
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                    }
+                    .accessibilityIdentifier("p4-advanced-minute-group")
+                }
+                HStack(spacing: 8) {
+                    Text("Breath phase")
+                    Spacer(minLength: 6)
+                    Text(breathingLabel(position))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
                 let totalCounts = Double(
                     model.clockSettings.inhaleCounts + model.clockSettings.exhaleCounts)
                 ProgressView(value: max(0, min(totalCounts,
@@ -1098,15 +1182,25 @@ private struct MetronomeClockPanel: View {
                     .accessibilityLabel("Current inhale or exhale group progress")
             }
             if let next {
-                LabeledContent("Next full alignment",
-                    value: String(format: "%.1f sec", next))
+                HStack(spacing: 8) {
+                    Text("Next full alignment")
+                    Spacer(minLength: 6)
+                    Text(String(format: "%.1f sec", next))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                }
             }
-            LabeledContent("Minute block",
-                value: "\(Int(blockElapsed / 60) + 1) / \(model.clockSettings.groupingMinutes)")
+            HStack(spacing: 8) {
+                Text("Minute block")
+                Spacer(minLength: 6)
+                Text("\(Int(blockElapsed / 60) + 1) / \(model.clockSettings.groupingMinutes)")
+                    .monospacedDigit()
+            }
             ProgressView(value: blockElapsed, total: blockLength)
                 .accessibilityLabel("Higher-timeframe block position")
         }
         .font(.caption)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func clockLabel(_ date: Date) -> String {

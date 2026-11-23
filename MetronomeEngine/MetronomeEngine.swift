@@ -167,6 +167,44 @@ private struct ClickVoice {
     }
 }
 
+/// Longer, legato "GO" arrival cue on full clock/musical supercycle
+/// coincidence. Intentionally unlike the short/high HH:MM:00 tick:
+/// low G4 (392 Hz) with a gentle octave harmonic, 1.0 second total,
+/// soft 30 ms onset and 250 ms release. No sample buffers/allocations.
+private struct MasterSuccessVoice {
+    private var frame = 0
+    private var frameCount = 0
+    private var attackFrames = 1
+    private var releaseFrames = 1
+    private var amplitude = 0.0
+    private var phase = 0.0
+    private var phaseStep = 0.0
+
+    mutating func start(sampleRate: Double, volume: Double) {
+        frame = 0
+        frameCount = max(1, Int(sampleRate * 1.0))
+        attackFrames = max(1, Int(sampleRate * 0.03))
+        releaseFrames = max(1, Int(sampleRate * 0.25))
+        amplitude = max(0, min(0.35, volume))
+        phase = 0
+        phaseStep = 2 * Double.pi * 392.0 / sampleRate
+    }
+
+    mutating func next() -> Double {
+        guard frame < frameCount else { return 0 }
+        let elapsed = frame
+        let attack = min(1.0, Double(elapsed) / Double(attackFrames))
+        let release = min(1.0, Double(frameCount - elapsed) / Double(releaseFrames))
+        let envelope = min(attack, release)
+        // The sustained fundamental + octave sounds like a musical "GO",
+        // not another high-frequency clock tick.
+        let tone = (sin(phase) + 0.24 * sin(2.0 * phase)) / 1.24
+        phase += phaseStep
+        frame += 1
+        return amplitude * envelope * tone
+    }
+}
+
 private final class RenderState: @unchecked Sendable {
     private let sampleRate: Double
     private let secondsPerNotePulse: Double
@@ -187,6 +225,7 @@ private final class RenderState: @unchecked Sendable {
     private var legacyBeatIndex = 0
     private var beatVoice = ClickVoice()
     private var minuteVoice = ClickVoice()
+    private var masterVoice = MasterSuccessVoice()
     private var breathVoice = ClickVoice()
     private var crossVoice = ClickVoice()
     private var groupVoice = ClickVoice()
@@ -250,6 +289,7 @@ private final class RenderState: @unchecked Sendable {
             var sound = beatVoice.next()
             if settings.clockSync {
                 sound += minuteVoice.next()
+                sound += masterVoice.next()
                 sound += breathVoice.next()
                 sound += crossVoice.next()
                 sound += groupVoice.next()
@@ -275,13 +315,15 @@ private final class RenderState: @unchecked Sendable {
               let minute = ClockRhythmMath.eventIndex(atUnixSeconds: unix, period: 60)
         else { return }
         let minuteCrossed = minuteLatch.advance(to: minute)
-        let masterBoundary = minuteCrossed && settings.supercycleCues
-            && fullAlignmentMinutes.map { minute % $0 == 0 } == true
+        let sounds = ClockRhythmMath.boundarySounds(
+            minuteIndex: minute, settings: settings,
+            fullAlignmentMinutes: fullAlignmentMinutes)
+        let masterBoundary = minuteCrossed && sounds.masterSuccess
         if let previous = lastBeatIndex, beat > previous {
             let accent = beat % Int64(settings.meterNumerator) == 0
             // The unique minute chime wins when musical and real-world
             // boundaries overlap. Do not stack two full-power transients.
-            let beatGain: Double = (minuteCrossed && (settings.markerEnabled || masterBoundary)) ? 0.25 : 1.0
+            let beatGain: Double = (minuteCrossed && (sounds.ordinaryMinute || masterBoundary)) ? 0.25 : 1.0
             beatVoice.start(frequency: accent ? 1_600 : 1_050,
                             seconds: 0.018, volume: peakAmplitude * beatGain,
                             sampleRate: sampleRate)
@@ -289,18 +331,24 @@ private final class RenderState: @unchecked Sendable {
         lastBeatIndex = beat
 
         if minuteCrossed {
-            if settings.markerEnabled || masterBoundary {
-                let frequency: Double = masterBoundary ? 2_100 :
-                    (settings.markerVariant == 0 ? 1_830 :
-                     (settings.markerVariant == 1 ? 2_500 : 1_380))
-                let level = settings.markerEnabled
-                    ? settings.markerVolume : settings.groupCueVolume
-                minuteVoice.start(frequency: frequency,
-                                  seconds: masterBoundary ? 0.085 : 0.065,
-                                  volume: peakAmplitude * level,
+            // The minute signal is ALWAYS the same short recognizable tick.
+            // Its identity must not be replaced by an alignment chime.
+            if sounds.ordinaryMinute {
+                let frequency: Double = settings.markerVariant == 0 ? 1_830 :
+                    (settings.markerVariant == 1 ? 2_500 : 1_380)
+                minuteVoice.start(frequency: frequency, seconds: 0.065,
+                                  volume: peakAmplitude * settings.markerVolume,
                                   sampleRate: sampleRate)
             }
-         }
+            // Independent low sustained "GO" cue, layered at safe gain
+            // with the minute tick only when the master pattern realigns.
+            if sounds.masterSuccess {
+                masterVoice.start(
+                    sampleRate: sampleRate,
+                    volume: peakAmplitude * settings.groupCueVolume * 1.3
+                )
+            }
+        }
         // Higher-timeframe marker may be anchored either to real-world
         // clock blocks or the particular session's Play instant.
         let groupOrigin = settings.blockAnchor == .session
@@ -308,7 +356,8 @@ private final class RenderState: @unchecked Sendable {
         let groupSeconds = Double(settings.groupingMinutes) * 60
         if let group = ClockRhythmMath.eventIndex(
             atUnixSeconds: unix - groupOrigin, period: groupSeconds) {
-            if settings.supercycleCues, let previous = lastGroupIndex, group > previous {
+            if settings.supercycleCues && !masterBoundary,
+               let previous = lastGroupIndex, group > previous {
                 groupVoice.start(
                     frequency: 580, seconds: 0.11,
                     volume: peakAmplitude * settings.groupCueVolume,

@@ -112,6 +112,76 @@ final class MetronomeTimingTests: XCTestCase {
         XCTAssertEqual(ClockRhythmMath.eventIndex(atUnixSeconds: 38, period: 1), 38)
     }
 
+    func testMinuteBreathingGroupTwoOfFiveAndBarFourOfFifteen() throws {
+        let s = ClockRhythmSettings()
+        let progress = try XCTUnwrap(ClockRhythmMath.minuteWindow(
+            atUnixSeconds: 73.1, bpm: 60, settings: s))
+        XCTAssertEqual(progress.groupNumber, 2)
+        XCTAssertEqual(progress.totalGroups, 5)
+        XCTAssertEqual(progress.measureNumber, 4)
+        XCTAssertEqual(progress.totalMeasures, 15)
+        XCTAssertEqual(progress.elapsedSeconds, 13.1, accuracy: 0.00001)
+        XCTAssertEqual(progress.secondsRemaining, 46.9, accuracy: 0.00001)
+    }
+
+    func testPartialBreathingGroupsRemainCountedInsideEachMinute() throws {
+        let s = ClockRhythmSettings()
+        let firstMinute = try XCTUnwrap(ClockRhythmMath.minuteWindow(
+            atUnixSeconds: 9, bpm: 90, settings: s))
+        XCTAssertEqual(firstMinute.groupNumber, 2)
+        XCTAssertEqual(firstMinute.totalGroups, 8) // 7 complete + 1 partial
+        XCTAssertEqual(firstMinute.totalMeasures, 23) // 22 complete + partial
+        let nextMinute = try XCTUnwrap(ClockRhythmMath.minuteWindow(
+            atUnixSeconds: 65, bpm: 90, settings: s))
+        XCTAssertEqual(nextMinute.groupNumber, 2)
+        XCTAssertEqual(nextMinute.totalGroups, 8) // both edge groups partial
+        XCTAssertEqual(nextMinute.measureNumber, 3)
+    }
+
+    func testLongUnixEpochCannotLeakHugeBreathingOrMeasureNumbers() throws {
+        let s = ClockRhythmSettings()
+        let farFuture: Double = 1_798_000_000.0
+        let value = try XCTUnwrap(ClockRhythmMath.minuteWindow(
+            atUnixSeconds: farFuture, bpm: 180, settings: s))
+        XCTAssertTrue((1...16).contains(value.groupNumber))
+        XCTAssertTrue((1...16).contains(value.totalGroups))
+        XCTAssertTrue((1...46).contains(value.measureNumber))
+        XCTAssertTrue((1...46).contains(value.totalMeasures))
+    }
+
+    func testMinuteResetMakesGroupsLocalWithoutResettingMeter() throws {
+        var s = ClockRhythmSettings()
+        s.resetBreathingOnMinute = true
+        let value = try XCTUnwrap(ClockRhythmMath.minuteWindow(
+            atUnixSeconds: 69, bpm: 90, settings: s))
+        XCTAssertEqual(value.groupNumber, 2)
+        XCTAssertEqual(value.totalGroups, 8)
+        XCTAssertEqual(value.measureNumber, 4)
+    }
+
+    func testIndependentMasterGOAndOrdinaryMinuteCanCoincide() {
+        var s = ClockRhythmSettings()
+        s.supercycleCues = true
+        let coincident = ClockRhythmMath.boundarySounds(
+            minuteIndex: 120, settings: s, fullAlignmentMinutes: 2)
+        XCTAssertTrue(coincident.ordinaryMinute)
+        XCTAssertTrue(coincident.masterSuccess)
+        let offCycle = ClockRhythmMath.boundarySounds(
+            minuteIndex: 121, settings: s, fullAlignmentMinutes: 2)
+        XCTAssertTrue(offCycle.ordinaryMinute)
+        XCTAssertFalse(offCycle.masterSuccess)
+        s.markerEnabled = false
+        let masterOnly = ClockRhythmMath.boundarySounds(
+            minuteIndex: 120, settings: s, fullAlignmentMinutes: 2)
+        XCTAssertFalse(masterOnly.ordinaryMinute)
+        XCTAssertTrue(masterOnly.masterSuccess)
+        s.supercycleCues = false
+        let silent = ClockRhythmMath.boundarySounds(
+            minuteIndex: 120, settings: s, fullAlignmentMinutes: 2)
+        XCTAssertFalse(silent.ordinaryMinute)
+        XCTAssertFalse(silent.masterSuccess)
+    }
+
     func testMinuteBoundaryLatchNeverDuplicatesClicks() {
         var latch = ClockBoundaryLatch()
         XCTAssertFalse(latch.advance(to: 100))

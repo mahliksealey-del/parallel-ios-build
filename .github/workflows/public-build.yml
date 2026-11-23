@@ -7,6 +7,7 @@ on:
       - phase3/rea-d01-session-fade-2026-11-20
       - phase3/one-swoop-ci-2026-11-20
       - phase4/clock-sync-supercycle-ci-2026-11-22
+      - fix/phase4-minute-groups-go-chime-2026-11-23
 
 permissions:
   contents: read
