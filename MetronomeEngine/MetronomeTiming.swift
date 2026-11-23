@@ -205,9 +205,12 @@ public enum ClockRhythmMath {
 
         let start = floor(t / 60) * 60
         let end = start + 60
-        // This avoids including an event exactly on the next minute boundary
-        // in the preceding minute's group count.
-        let lastMoment = end.nextDown
+        // The immediately adjacent floating-point number can round back
+        // onto a bar boundary when divided by a non-integer beat period.
+        // A tiny output-only guard avoids counting the *next* minute's
+        // first group as part of this minute, even at Unix-epoch timestamps.
+        let boundaryGuard = max(0.000_001, end.ulp * 8)
+        let lastMoment = end - boundaryGuard
         let meterSeconds = 60 / bpm * 4 / Double(settings.meterDenominator) *
             Double(settings.meterNumerator)
         let breathSeconds = 60 / bpm * 4 / Double(settings.countDenominator) *
@@ -221,7 +224,8 @@ public enum ClockRhythmMath {
         let groupStartTime = settings.resetBreathingOnMinute ? 0 : start
         let groupCurrentTime = settings.resetBreathingOnMinute
             ? positiveRemainder(t, 60) : t
-        let groupEndTime = settings.resetBreathingOnMinute ? Double(60).nextDown : lastMoment
+        let groupEndTime = settings.resetBreathingOnMinute
+            ? (60.0 - 0.000_001) : lastMoment
         guard let firstGroup = eventIndex(atUnixSeconds: groupStartTime, period: breathSeconds),
               let currentGroup = eventIndex(atUnixSeconds: groupCurrentTime,
                                            period: breathSeconds),
