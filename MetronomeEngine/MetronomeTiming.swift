@@ -78,7 +78,13 @@ public struct ClockRhythmSettings: Codable, Equatable {
     public var crossCueVolume = 0.26
     public var groupCueVolume = 0.22
     public var breathCues = false
+    /// Existing persisted toggle now explicitly means the *time-chunk*
+    /// completion GO sound, not automatic musical/clock alignment.
     public var supercycleCues = false
+    /// Optional additions are Codable-compatible with saved D01 settings
+    /// that did not contain these keys; nil means off / quiet default.
+    public var alignmentCueEnabled: Bool? = nil
+    public var alignmentCueVolume: Double? = nil
     public var crossMode: CrossRhythmMode = .off
     public var crossGroup = 3
     public var ratioPulses = 3
@@ -91,6 +97,9 @@ public struct ClockRhythmSettings: Codable, Equatable {
     public var sessionStartUnixSeconds: Double? = nil
 
     public init() {}
+
+    public var playsAlignmentCue: Bool { alignmentCueEnabled ?? false }
+    public var effectiveAlignmentCueVolume: Double { alignmentCueVolume ?? 0.16 }
 
     /// Screen presentation changes must not interrupt an already playing PCM
     /// source. Compare only parameters that affect rendered audio or phase.
@@ -109,6 +118,8 @@ public struct ClockRhythmSettings: Codable, Equatable {
           && groupCueVolume == other.groupCueVolume
           && breathCues == other.breathCues
           && supercycleCues == other.supercycleCues
+          && playsAlignmentCue == other.playsAlignmentCue
+          && effectiveAlignmentCueVolume == other.effectiveAlignmentCueVolume
           && crossMode == other.crossMode
           && crossGroup == other.crossGroup
           && ratioPulses == other.ratioPulses
@@ -132,7 +143,9 @@ public struct ClockRhythmSettings: Codable, Equatable {
             && (2...64).contains(crossGroup)
             && (2...16).contains(ratioPulses)
             && (2...32).contains(ratioDuration)
-            && [5, 15, 30, 60].contains(groupingMinutes)
+            && (1...1_440).contains(groupingMinutes)
+            && effectiveAlignmentCueVolume.isFinite
+            && (0...0.6).contains(effectiveAlignmentCueVolume)
             && (sessionStartUnixSeconds == nil || sessionStartUnixSeconds!.isFinite)
     }
 }
@@ -161,15 +174,17 @@ public struct MinuteWindowPosition: Equatable {
     public let secondsRemaining: Double
 }
 
-public struct MinuteBoundarySounds: Equatable {
-    public let ordinaryMinute: Bool
-    public let masterSuccess: Bool
-
-    public init(ordinaryMinute: Bool, masterSuccess: Bool) {
-        self.ordinaryMinute = ordinaryMinute
-        self.masterSuccess = masterSuccess
-    }
+/// Distinct meanings and an intentional hierarchy of audible cues:
+/// ordinary HH:MM:00 tick, short optional musical/clock alignment "plonk",
+/// and a sustained GO at user-configured 5/10/15/custom-minute chunk end.
+/// A chunk GO suppresses only the optional alignment plonk when simultaneous;
+/// the recognizable minute tick is still independent.
+public struct ClockCueEvents: Equatable {
+    public let minuteTick: Bool
+    public let musicalAlignmentPing: Bool
+    public let timeChunkGO: Bool
 }
+
 
 public struct MinuteRhythmAnalysis {
     public let beatsPerMinute: Double
@@ -252,14 +267,37 @@ public enum ClockRhythmMath {
 
     /// A minute click and a master "GO" cue are *separate* audible events,
     /// including on minutes where the two rhythms realign exactly.
-    public static func boundarySounds(minuteIndex: Int64,
-                                      settings: ClockRhythmSettings,
-                                      fullAlignmentMinutes: Int64?) -> MinuteBoundarySounds {
-        let master = settings.supercycleCues &&
-            fullAlignmentMinutes.map { $0 > 0 && minuteIndex % $0 == 0 } == true
-        return MinuteBoundarySounds(ordinaryMinute: settings.markerEnabled,
-                                    masterSuccess: master)
+    public static func cueEvents(minuteCrossed: Bool,
+                                 minuteIndex: Int64,
+                                 chunkCrossed: Bool,
+                                 settings: ClockRhythmSettings,
+                                 fullAlignmentMinutes: Int64?) -> ClockCueEvents {
+        let chunkGO = chunkCrossed && settings.supercycleCues
+        let musicalAlignment = minuteCrossed && settings.playsAlignmentCue
+            && fullAlignmentMinutes.map {
+                $0 > 0 && minuteIndex % $0 == 0
+            } == true
+        return ClockCueEvents(
+            minuteTick: minuteCrossed && settings.markerEnabled,
+            musicalAlignmentPing: musicalAlignment && !chunkGO,
+            timeChunkGO: chunkGO
+        )
     }
+
+    /// Time chunks are independent of the meter and breath cycles. For
+    /// session anchoring the start timestamp comes from the existing
+    /// playback session; for real-clock mode 0 means Unix/UTC :00 phase.
+    public static func chunkIndex(atUnixSeconds t: Double,
+                                  settings: ClockRhythmSettings,
+                                  fallbackSessionStartUnixSeconds: Double? = nil) -> Int64? {
+        guard settings.isValid, t.isFinite else { return nil }
+        let origin = settings.blockAnchor == .session
+            ? (settings.sessionStartUnixSeconds ??
+               fallbackSessionStartUnixSeconds ?? t) : 0.0
+        return eventIndex(atUnixSeconds: t - origin,
+                          period: Double(settings.groupingMinutes) * 60)
+    }
+
 
     public static func minuteClock(at unixSeconds: Double) -> (elapsed: Double, untilNext: Double) {
         let elapsed = positiveRemainder(unixSeconds, 60)

@@ -791,8 +791,10 @@ private struct MetronomeClockPanel: View {
     @ObservedObject var model: MetronomeViewModel
     @State private var tempoText = ""
     @State private var metronomePresetName = ""
+    @State private var customChunkMinutesText = ""
     @State private var editingTempo = false
     @FocusState private var tempoFocused: Bool
+    @FocusState private var chunkFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -916,11 +918,17 @@ private struct MetronomeClockPanel: View {
             }
         }
         .onChange(of: model.clockSettings) { _ in model.applyClockSettings() }
-        .onChange(of: model.clockSettings.advancedView) { _ in tempoFocused = false }
+        .onChange(of: model.clockSettings.advancedView) { _ in
+            tempoFocused = false
+            chunkFocused = false
+        }
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
-                Button("Done") { tempoFocused = false }
+                Button("Done") {
+                    tempoFocused = false
+                    chunkFocused = false
+                }
             }
         }
         .onChange(of: model.bpm) { _ in
@@ -931,7 +939,7 @@ private struct MetronomeClockPanel: View {
     @ViewBuilder
     private var advancedControls: some View {
         Divider()
-        Text("Advanced · Rhythm & Supercycle").font(.headline)
+        Text("Advanced · Rhythm & Time Tracking").font(.headline)
         Picker("Breathing count unit", selection: $model.clockSettings.countDenominator) {
             ForEach([1,2,4,8,16,32], id: \.self) { value in
                 Text("1/\(value) note").tag(value)
@@ -942,9 +950,27 @@ private struct MetronomeClockPanel: View {
         Toggle("Inhale/exhale transition tones", isOn: $model.clockSettings.breathCues)
         Slider(value: $model.clockSettings.breathCueVolume, in: 0...1)
             .accessibilityLabel("Breathing cue volume")
-        Toggle("Higher-timeframe alignment tones", isOn: $model.clockSettings.supercycleCues)
+        Divider()
+        Text("Three distinct clock cues").font(.subheadline.bold())
+        Text("Minute = short high tick · Musical alignment = optional soft plonk · Time chunk complete = long one-second GO. If alignment and a chunk finish together, the GO replaces the optional plonk.")
+            .font(.caption).foregroundStyle(.secondary)
+        Toggle("Time chunk complete · long GO",
+               isOn: $model.clockSettings.supercycleCues)
+            .accessibilityIdentifier("p4-time-chunk-go-toggle")
         Slider(value: $model.clockSettings.groupCueVolume, in: 0...1)
-            .accessibilityLabel("Higher-timeframe cue volume")
+            .accessibilityLabel("Long GO volume")
+        Toggle("Musical/clock alignment · short plonk",
+               isOn: Binding<Bool>(
+                   get: { model.clockSettings.alignmentCueEnabled ?? false },
+                   set: { model.clockSettings.alignmentCueEnabled = $0 }
+               ))
+            .accessibilityIdentifier("p4-musical-alignment-cue-toggle")
+        Slider(value: Binding<Double>(
+            get: { model.clockSettings.alignmentCueVolume ?? 0.16 },
+            set: { model.clockSettings.alignmentCueVolume = $0 }
+        ), in: 0...0.6)
+            .accessibilityLabel("Musical alignment plonk volume")
+            .disabled(!(model.clockSettings.alignmentCueEnabled ?? false))
         Toggle("Distinct minute click", isOn: $model.clockSettings.markerEnabled)
         Slider(value: $model.clockSettings.markerVolume, in: 0...1)
             .accessibilityLabel("Minute marker level")
@@ -973,16 +999,45 @@ private struct MetronomeClockPanel: View {
             Stepper("Over quarter beats: \(model.clockSettings.ratioDuration)",
                 value: $model.clockSettings.ratioDuration, in: 2...32)
         }
-        Picker("Higher-timeframe block", selection: $model.clockSettings.groupingMinutes) {
-            ForEach([5,15,30,60], id: \.self) { n in Text("\(n) minutes").tag(n) }
+        Divider()
+        Text("Supercycle · Time chunks").font(.subheadline.bold())
+        Picker("GO every", selection: $model.clockSettings.groupingMinutes) {
+            ForEach([5, 10, 15, 30, 60], id: \.self) { n in
+                Text("\(n) minutes").tag(n)
+            }
+            if ![5, 10, 15, 30, 60].contains(model.clockSettings.groupingMinutes) {
+                Text("Custom · \(model.clockSettings.groupingMinutes) minutes")
+                    .tag(model.clockSettings.groupingMinutes)
+            }
         }
+        .accessibilityIdentifier("p4-time-chunk-minute-picker")
+        HStack(spacing: 8) {
+            TextField("Custom minutes (1–1440)", text: $customChunkMinutesText)
+                .keyboardType(.numberPad)
+                .textFieldStyle(.roundedBorder)
+                .focused($chunkFocused)
+                .accessibilityIdentifier("p4-custom-time-chunk-minutes")
+            Button("Set") {
+                guard let minutes = Int(customChunkMinutesText),
+                      (1...1_440).contains(minutes) else { return }
+                model.clockSettings.groupingMinutes = minutes
+                chunkFocused = false
+            }
+            .buttonStyle(.bordered)
+            .disabled(!(Int(customChunkMinutesText).map {
+                (1...1_440).contains($0)
+            } ?? false))
+            .accessibilityIdentifier("p4-apply-custom-time-chunk")
+        }
+        Text("A long GO sounds only when this many minutes have elapsed. Clock origin follows fixed time blocks; Session Start counts from pressing Play.")
+            .font(.caption).foregroundStyle(.secondary)
         Picker("Block origin", selection: $model.clockSettings.blockAnchor) {
             Text("Real clock").tag(MinuteBlockAnchor.clock)
             Text("Session Start").tag(MinuteBlockAnchor.session)
         }
         Toggle("UTC (Zulu) clock display", isOn: $model.clockSettings.showUTC)
         if let summary = model.minuteAnalysis {
-            LabeledContent("Combined musical supercycle",
+            LabeledContent("Musical/breath pattern period",
                 value: summary.supercycleBeats.map {
                     String(format: "%.2f quarter beats", $0)
                 } ?? "Not representable")
@@ -1082,7 +1137,7 @@ private struct MetronomeClockPanel: View {
             }
             if let beat {
                 HStack(spacing: 8) {
-                    Text("Next :00")
+                    Text("Next :00 lands on")
                     Spacer(minLength: 5)
                     Text(ClockRhythmMath.meterBeatDescription(beat.beatInMeasure))
                         .monospacedDigit()
@@ -1183,7 +1238,7 @@ private struct MetronomeClockPanel: View {
             }
             if let next {
                 HStack(spacing: 8) {
-                    Text("Next full alignment")
+                    Text("Next musical–clock alignment")
                     Spacer(minLength: 6)
                     Text(String(format: "%.1f sec", next))
                         .monospacedDigit()
@@ -1191,13 +1246,20 @@ private struct MetronomeClockPanel: View {
                 }
             }
             HStack(spacing: 8) {
-                Text("Minute block")
+                Text("Time chunk · GO")
                 Spacer(minLength: 6)
-                Text("\(Int(blockElapsed / 60) + 1) / \(model.clockSettings.groupingMinutes)")
+                Text("\(Int(blockElapsed / 60) + 1) / \(model.clockSettings.groupingMinutes) min")
                     .monospacedDigit()
             }
             ProgressView(value: blockElapsed, total: blockLength)
-                .accessibilityLabel("Higher-timeframe block position")
+                .accessibilityLabel("Time chunk progress")
+            HStack(spacing: 8) {
+                Text("Until long GO")
+                Spacer(minLength: 6)
+                Text(String(format: "%.1f sec", blockLength - blockElapsed))
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
         }
         .font(.caption)
         .frame(maxWidth: .infinity, alignment: .leading)

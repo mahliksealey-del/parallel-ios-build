@@ -167,11 +167,12 @@ private struct ClickVoice {
     }
 }
 
-/// Longer, legato "GO" arrival cue on full clock/musical supercycle
-/// coincidence. Intentionally unlike the short/high HH:MM:00 tick:
+/// Longer, legato "GO" cue ONLY when a designated wall-clock or session
+/// time chunk is completed. Musical/clock alignment is a separate subtle
+/// signal; neither event can masquerade as the short HH:MM:00 tick.
 /// low G4 (392 Hz) with a gentle octave harmonic, 1.0 second total,
 /// soft 30 ms onset and 250 ms release. No sample buffers/allocations.
-private struct MasterSuccessVoice {
+private struct TimeChunkGoVoice {
     private var frame = 0
     private var frameCount = 0
     private var attackFrames = 1
@@ -219,17 +220,19 @@ private final class RenderState: @unchecked Sendable {
     private var lastBreathStartIndex: Int64?
     private var lastBreathOutIndex: Int64?
     private var lastCrossIndex: Int64?
-    private var lastGroupIndex: Int64?
+    private var lastChunkIndex: Int64?
     private var legacyFramePosition = 0.0
     private var legacyNextBeatFrame = 0.0
     private var legacyBeatIndex = 0
     private var beatVoice = ClickVoice()
     private var minuteVoice = ClickVoice()
-    private var masterVoice = MasterSuccessVoice()
+    private var chunkVoice = TimeChunkGoVoice()
     private var breathVoice = ClickVoice()
     private var crossVoice = ClickVoice()
-    private var groupVoice = ClickVoice()
+    private var alignmentVoice = ClickVoice()
     private let fullAlignmentMinutes: Int64?
+    private let chunkOriginUnixSeconds: Double
+    private let chunkPeriodSeconds: Double
 
     init(bpm: Double, sampleRate: Double, peakAmplitude: Double,
          settings: ClockRhythmSettings, anchorWallSeconds: Double,
@@ -244,6 +247,9 @@ private final class RenderState: @unchecked Sendable {
         self.anchorHostSeconds = anchorHostSeconds
         self.fullAlignmentMinutes = ClockRhythmMath.analyze(bpm: bpm, settings: settings)?
             .masterAlignmentMinutes
+        self.chunkOriginUnixSeconds = settings.blockAnchor == .session
+            ? (settings.sessionStartUnixSeconds ?? anchorWallSeconds) : 0.0
+        self.chunkPeriodSeconds = Double(settings.groupingMinutes) * 60
     }
 
     func render(timestamp: UnsafePointer<AudioTimeStamp>, frameCount: AVAudioFrameCount,
@@ -289,10 +295,10 @@ private final class RenderState: @unchecked Sendable {
             var sound = beatVoice.next()
             if settings.clockSync {
                 sound += minuteVoice.next()
-                sound += masterVoice.next()
+                sound += chunkVoice.next()
                 sound += breathVoice.next()
                 sound += crossVoice.next()
-                sound += groupVoice.next()
+                sound += alignmentVoice.next()
                 // Single clicks preserve their intended loudness. An
                 // identity-through-0.92 smooth limiter limits coincident
                 // tones below full scale without re-amplifying quiet sound.
@@ -315,56 +321,66 @@ private final class RenderState: @unchecked Sendable {
               let minute = ClockRhythmMath.eventIndex(atUnixSeconds: unix, period: 60)
         else { return }
         let minuteCrossed = minuteLatch.advance(to: minute)
-        let sounds = ClockRhythmMath.boundarySounds(
-            minuteIndex: minute, settings: settings,
-            fullAlignmentMinutes: fullAlignmentMinutes)
-        let masterBoundary = minuteCrossed && sounds.masterSuccess
+
+        // Time chunks are measured independently of the breathing/meter
+        // recurrence: 5, 10, 15 or any custom 1–1440 minute interval.
+        // The session fallback is the immutable launch anchor, not a new
+        // timestamp for each sample, so the configured chunk can complete.
+        var chunkCrossed = false
+        if let chunk = ClockRhythmMath.eventIndex(
+            atUnixSeconds: unix - chunkOriginUnixSeconds,
+            period: chunkPeriodSeconds
+        ) {
+            if let previous = lastChunkIndex {
+                chunkCrossed = previous != Int64.max && chunk == previous + 1
+            }
+            lastChunkIndex = chunk
+        }
+
+        let cues = ClockRhythmMath.cueEvents(
+            minuteCrossed: minuteCrossed,
+            minuteIndex: minute,
+            chunkCrossed: chunkCrossed,
+            settings: settings,
+            fullAlignmentMinutes: fullAlignmentMinutes
+        )
+
         if let previous = lastBeatIndex, beat > previous {
             let accent = beat % Int64(settings.meterNumerator) == 0
-            // The unique minute chime wins when musical and real-world
-            // boundaries overlap. Do not stack two full-power transients.
-            let beatGain: Double = (minuteCrossed && (sounds.ordinaryMinute || masterBoundary)) ? 0.25 : 1.0
+            // The audible boundary marker has priority over ordinary ticks.
+            let priorityCue = cues.minuteTick || cues.musicalAlignmentPing || cues.timeChunkGO
+            let beatGain: Double = priorityCue ? 0.25 : 1.0
             beatVoice.start(frequency: accent ? 1_600 : 1_050,
                             seconds: 0.018, volume: peakAmplitude * beatGain,
                             sampleRate: sampleRate)
         }
         lastBeatIndex = beat
 
-        if minuteCrossed {
-            // The minute signal is ALWAYS the same short recognizable tick.
-            // Its identity must not be replaced by an alignment chime.
-            if sounds.ordinaryMinute {
-                let frequency: Double = settings.markerVariant == 0 ? 1_830 :
-                    (settings.markerVariant == 1 ? 2_500 : 1_380)
-                minuteVoice.start(frequency: frequency, seconds: 0.065,
-                                  volume: peakAmplitude * settings.markerVolume,
-                                  sampleRate: sampleRate)
-            }
-            // Independent low sustained "GO" cue, layered at safe gain
-            // with the minute tick only when the master pattern realigns.
-            if sounds.masterSuccess {
-                masterVoice.start(
-                    sampleRate: sampleRate,
-                    volume: peakAmplitude * settings.groupCueVolume * 1.3
-                )
-            }
+        if cues.minuteTick {
+            let frequency: Double = settings.markerVariant == 0 ? 1_830 :
+                (settings.markerVariant == 1 ? 2_500 : 1_380)
+            minuteVoice.start(frequency: frequency, seconds: 0.065,
+                              volume: peakAmplitude * settings.markerVolume,
+                              sampleRate: sampleRate)
         }
-        // Higher-timeframe marker may be anchored either to real-world
-        // clock blocks or the particular session's Play instant.
-        let groupOrigin = settings.blockAnchor == .session
-            ? (settings.sessionStartUnixSeconds ?? anchorWallSeconds) : 0
-        let groupSeconds = Double(settings.groupingMinutes) * 60
-        if let group = ClockRhythmMath.eventIndex(
-            atUnixSeconds: unix - groupOrigin, period: groupSeconds) {
-            if settings.supercycleCues && !masterBoundary,
-               let previous = lastGroupIndex, group > previous {
-                groupVoice.start(
-                    frequency: 580, seconds: 0.11,
-                    volume: peakAmplitude * settings.groupCueVolume,
-                    sampleRate: sampleRate
-                )
-            }
-            lastGroupIndex = group
+
+        if cues.musicalAlignmentPing {
+            // Brief low "plonk" instead of a high minute tick or sustained
+            // block GO. Opt-in and quiet by default to avoid cue overload.
+            alignmentVoice.start(
+                frequency: 870, seconds: 0.105,
+                volume: peakAmplitude * settings.effectiveAlignmentCueVolume,
+                sampleRate: sampleRate
+            )
+        }
+
+        if cues.timeChunkGO {
+            // One-second sustained G4 GO, only at the configured time
+            // chunk boundary, independent of tempo/meter/breath alignment.
+            chunkVoice.start(
+                sampleRate: sampleRate,
+                volume: peakAmplitude * settings.groupCueVolume * 1.3
+            )
         }
 
         let breathPeriod = secondsPerBreathCount *

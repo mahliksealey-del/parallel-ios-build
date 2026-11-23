@@ -159,27 +159,117 @@ final class MetronomeTimingTests: XCTestCase {
         XCTAssertEqual(value.measureNumber, 4)
     }
 
-    func testIndependentMasterGOAndOrdinaryMinuteCanCoincide() {
+    func testMusicalAlignmentNeverTriggersLongTimeChunkGO() {
         var s = ClockRhythmSettings()
-        s.supercycleCues = true
-        let coincident = ClockRhythmMath.boundarySounds(
-            minuteIndex: 120, settings: s, fullAlignmentMinutes: 2)
-        XCTAssertTrue(coincident.ordinaryMinute)
-        XCTAssertTrue(coincident.masterSuccess)
-        let offCycle = ClockRhythmMath.boundarySounds(
-            minuteIndex: 121, settings: s, fullAlignmentMinutes: 2)
-        XCTAssertTrue(offCycle.ordinaryMinute)
-        XCTAssertFalse(offCycle.masterSuccess)
+        s.supercycleCues = true // the previously saved higher-timeframe toggle
+        s.alignmentCueEnabled = true
+
+        let eachMinute = ClockRhythmMath.cueEvents(
+            minuteCrossed: true, minuteIndex: 121,
+            chunkCrossed: false, settings: s, fullAlignmentMinutes: 1)
+        XCTAssertTrue(eachMinute.minuteTick)
+        XCTAssertTrue(eachMinute.musicalAlignmentPing)
+        XCTAssertFalse(eachMinute.timeChunkGO) // Crucial user-requested separation
+
+        let fiveMinuteChunk = ClockRhythmMath.cueEvents(
+            minuteCrossed: true, minuteIndex: 125,
+            chunkCrossed: true, settings: s, fullAlignmentMinutes: 1)
+        XCTAssertTrue(fiveMinuteChunk.minuteTick)
+        XCTAssertFalse(fiveMinuteChunk.musicalAlignmentPing) // less sound clutter
+        XCTAssertTrue(fiveMinuteChunk.timeChunkGO)
+
         s.markerEnabled = false
-        let masterOnly = ClockRhythmMath.boundarySounds(
-            minuteIndex: 120, settings: s, fullAlignmentMinutes: 2)
-        XCTAssertFalse(masterOnly.ordinaryMinute)
-        XCTAssertTrue(masterOnly.masterSuccess)
+        let goOnly = ClockRhythmMath.cueEvents(
+            minuteCrossed: false, minuteIndex: 125,
+            chunkCrossed: true, settings: s, fullAlignmentMinutes: 1)
+        XCTAssertFalse(goOnly.minuteTick)
+        XCTAssertFalse(goOnly.musicalAlignmentPing)
+        XCTAssertTrue(goOnly.timeChunkGO)
+
         s.supercycleCues = false
-        let silent = ClockRhythmMath.boundarySounds(
-            minuteIndex: 120, settings: s, fullAlignmentMinutes: 2)
-        XCTAssertFalse(silent.ordinaryMinute)
-        XCTAssertFalse(silent.masterSuccess)
+        let alignmentOnly = ClockRhythmMath.cueEvents(
+            minuteCrossed: true, minuteIndex: 126,
+            chunkCrossed: true, settings: s, fullAlignmentMinutes: 1)
+        XCTAssertFalse(alignmentOnly.minuteTick)
+        XCTAssertTrue(alignmentOnly.musicalAlignmentPing)
+        XCTAssertFalse(alignmentOnly.timeChunkGO)
+    }
+
+    func testDefaultAudioAvoidsExtraMusicalAlignmentNoise() {
+        let s = ClockRhythmSettings()
+        XCTAssertFalse(s.playsAlignmentCue)
+        let atClock = ClockRhythmMath.cueEvents(
+            minuteCrossed: true, minuteIndex: 100,
+            chunkCrossed: false, settings: s, fullAlignmentMinutes: 1)
+        XCTAssertTrue(atClock.minuteTick)
+        XCTAssertFalse(atClock.musicalAlignmentPing)
+        XCTAssertFalse(atClock.timeChunkGO)
+    }
+
+    func testTimeChunkFiveTenFifteenAndCustomMinuteBoundaries() throws {
+        var s = ClockRhythmSettings()
+        for minutes in [5, 10, 15, 30, 60, 7, 11, 120, 1_440] {
+            s.groupingMinutes = minutes
+            XCTAssertTrue(s.isValid)
+            let boundary = Double(minutes) * 60
+            let before = try XCTUnwrap(ClockRhythmMath.chunkIndex(
+                atUnixSeconds: boundary - 0.001, settings: s))
+            let after = try XCTUnwrap(ClockRhythmMath.chunkIndex(
+                atUnixSeconds: boundary, settings: s))
+            XCTAssertEqual(before, 0, "Unexpected early GO for \(minutes) minutes")
+            XCTAssertEqual(after, 1, "No GO at \(minutes) minutes")
+            XCTAssertEqual(ClockRhythmMath.chunkIndex(
+                atUnixSeconds: boundary * 2, settings: s), 2)
+        }
+        s.groupingMinutes = 0
+        XCTAssertFalse(s.isValid)
+        s.groupingMinutes = 1_441
+        XCTAssertFalse(s.isValid)
+    }
+
+    func testCustomChunkCanBeAnchoredToSessionInsteadOfUtcMinute() throws {
+        var s = ClockRhythmSettings()
+        s.groupingMinutes = 10
+        s.blockAnchor = .session
+        s.sessionStartUnixSeconds = 137.5
+        XCTAssertEqual(ClockRhythmMath.chunkIndex(
+            atUnixSeconds: 737.499, settings: s), 0)
+        XCTAssertEqual(ClockRhythmMath.chunkIndex(
+            atUnixSeconds: 737.5, settings: s), 1)
+        s.blockAnchor = .clock
+        XCTAssertEqual(ClockRhythmMath.chunkIndex(
+            atUnixSeconds: 599.9, settings: s), 0)
+        XCTAssertEqual(ClockRhythmMath.chunkIndex(
+            atUnixSeconds: 600, settings: s), 1)
+        XCTAssertEqual(ClockRhythmMath.chunkIndex(
+            atUnixSeconds: 1_200, settings: s), 2)
+    }
+
+    func testExistingD01ClockSettingsAndPresetsRemainCodable() throws {
+        // New settings are optional, so decode older D01 JSON *without*
+        // the new keys and preserve the owner's prior cue and volume values.
+        var previous = ClockRhythmSettings()
+        previous.supercycleCues = true
+        previous.groupCueVolume = 0.43
+        previous.groupingMinutes = 15
+        let original = try JSONEncoder().encode(previous)
+        let json = String(decoding: original, as: UTF8.self)
+        XCTAssertFalse(json.contains("alignmentCueEnabled"))
+        XCTAssertFalse(json.contains("alignmentCueVolume"))
+        let restored = try JSONDecoder().decode(ClockRhythmSettings.self, from: original)
+        XCTAssertTrue(restored.supercycleCues)
+        XCTAssertFalse(restored.playsAlignmentCue)
+        XCTAssertEqual(restored.groupCueVolume, 0.43, accuracy: 0.000001)
+        XCTAssertEqual(restored.groupingMinutes, 15)
+
+        previous.alignmentCueEnabled = true
+        previous.alignmentCueVolume = 0.18
+        previous.groupingMinutes = 7
+        let edited = try JSONDecoder().decode(
+            ClockRhythmSettings.self, from: JSONEncoder().encode(previous))
+        XCTAssertTrue(edited.playsAlignmentCue)
+        XCTAssertEqual(edited.effectiveAlignmentCueVolume, 0.18, accuracy: 0.000001)
+        XCTAssertEqual(edited.groupingMinutes, 7)
     }
 
     func testMinuteBoundaryLatchNeverDuplicatesClicks() {
@@ -245,6 +335,12 @@ final class MetronomeTimingTests: XCTestCase {
         b.showUTC = true
         XCTAssertTrue(a.hasSameAudioConfiguration(as: b))
         a.crossMode = .grouped
+        XCTAssertFalse(a.hasSameAudioConfiguration(as: b))
+        a = b
+        a.alignmentCueEnabled = true
+        XCTAssertFalse(a.hasSameAudioConfiguration(as: b))
+        a = b
+        a.groupingMinutes = 10
         XCTAssertFalse(a.hasSameAudioConfiguration(as: b))
     }
 
