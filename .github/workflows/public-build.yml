@@ -10,6 +10,7 @@ on:
       - fix/phase4-minute-groups-go-chime-2026-11-23
       - fix/phase4-time-chunk-go-vs-alignment-2026-11-23
       - feature/parallel-p5-seven-source-fullscreen-2026-11-23
+      - fix/parallel-p5-d02-audio-session-2026-11-23
 
 permissions:
   contents: read
