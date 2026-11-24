@@ -1389,7 +1389,12 @@ private struct FullScreenVideoViewer: View {
     let videos: [MediaMixerViewModel]
     let onSelectionChange: (Int) -> Void
     @State private var selectedSlot: Int
+    @State private var controlsVisible = true
+    @State private var interaction = 0
+    @State private var editing = false
+    @State private var fill = false
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
 
     init(videos: [MediaMixerViewModel], selectedSlot: Int,
          onSelectionChange: @escaping (Int) -> Void) {
@@ -1403,171 +1408,179 @@ private struct FullScreenVideoViewer: View {
     }
 
     var body: some View {
-        VStack(spacing: 14) {
-            HStack {
-                Text("Video \(selectedSlot + 1) · Full Screen")
-                    .font(.headline)
-                    .lineLimit(1)
-                Spacer(minLength: 5)
-                Button {
-                    dismiss()
-                } label: {
-                    Label("Close", systemImage: "arrow.down.right.and.arrow.up.left")
-                }
-                .buttonStyle(.bordered)
-                .accessibilityIdentifier("p5-fullscreen-close")
-            }
-            .padding(.horizontal)
-
-            FullScreenPlayerControls(media: videos[selectedSlot])
+        ZStack {
+            Color.black.ignoresSafeArea()
+            VideoSurface(player: videos[selectedSlot].player,
+                isForeground: scenePhase == .active,
+                keepAttachedInBackground: false, onCanvasReady: nil,
+                videoGravity: fill ? .resizeAspectFill : .resizeAspect)
                 .id(selectedSlot)
-                .frame(maxWidth: .infinity)
-
-            HStack {
-                Button {
-                    selectAdjacent(-1)
-                } label: {
-                    Label("Previous video", systemImage: "chevron.left")
-                }
-                .disabled(loadedVideoIndices.count < 2)
-                Spacer()
-                Text("Switch the picture, not the playback")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button {
-                    selectAdjacent(1)
-                } label: {
-                    Label("Next video", systemImage: "chevron.right")
-                }
-                .disabled(loadedVideoIndices.count < 2)
-            }
-            .buttonStyle(.bordered)
-            .padding(.horizontal)
-            .accessibilityIdentifier("p5-fullscreen-prev-next")
-
-            HStack(spacing: 7) {
-                ForEach(videos.indices, id: \.self) { index in
-                    Button("V\(index + 1)") {
-                        changeSelection(to: index)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(selectedSlot == index ? Color.accentColor : Color.secondary)
-                    .disabled(!videos[index].hasVideo)
-                    .frame(maxWidth: .infinity)
-                    .accessibilityLabel("Show Video \(index + 1) in full screen")
-                    .accessibilityIdentifier("p5-fullscreen-select-\(index + 1)")
-                }
-            }
-            .padding(.horizontal)
-            Spacer(minLength: 0)
-            Text("Each video keeps its own audio, position, volume and playback state. PiP remains on Video 1.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                .ignoresSafeArea()
+                .accessibilityIdentifier("p5-fullscreen-video-\(selectedSlot + 1)")
+            Color.clear.contentShape(Rectangle()).ignoresSafeArea()
+                .onTapGesture { toggleControls() }
+                .accessibilityLabel(controlsVisible ? "Hide playback controls" : "Show playback controls")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { toggleControls() }
         }
-        .padding(.top, 12)
-        .background(Color(.systemBackground))
+        .overlay(alignment: .top) {
+            if controlsVisible {
+                HStack(spacing: 4) {
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark").frame(width: 44, height: 44)
+                    }
+                    .accessibilityLabel("Close fullscreen")
+                    .accessibilityIdentifier("p5-fullscreen-close")
+                    Button { selectAdjacent(-1) } label: {
+                        Image(systemName: "chevron.left").frame(width: 44, height: 44)
+                    }
+                    .disabled(loadedVideoIndices.count < 2)
+                    .accessibilityLabel("Previous video")
+                    ForEach(videos.indices, id: \.self) { index in
+                        Button { changeSelection(to: index) } label: {
+                            Text("V\(index + 1)").font(.subheadline.weight(.semibold))
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .background(selectedSlot == index ? Color.white.opacity(0.25) : Color.clear, in: Capsule())
+                        }
+                        .disabled(!videos[index].hasVideo)
+                        .accessibilityLabel("Show Video \(index + 1) in full screen")
+                        .accessibilityIdentifier("p5-fullscreen-select-\(index + 1)")
+                    }
+                    Button { selectAdjacent(1) } label: {
+                        Image(systemName: "chevron.right").frame(width: 44, height: 44)
+                    }
+                    .disabled(loadedVideoIndices.count < 2)
+                    .accessibilityLabel("Next video")
+                    Button { fill.toggle(); interaction += 1 } label: {
+                        Image(systemName: fill ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                            .frame(width: 44, height: 44)
+                    }
+                    .accessibilityLabel(fill ? "Fit entire video" : "Fill screen")
+                }
+                .padding(.horizontal, 6)
+                .frame(maxWidth: 650)
+                .background(Color.black.opacity(0.48), in: RoundedRectangle(cornerRadius: 18))
+                .padding(.horizontal, 4)
+                .accessibilityIdentifier("p5-fullscreen-prev-next")
+                .transition(.opacity)
+            }
+        }
+        .overlay {
+            if controlsVisible {
+                FullScreenPlayerControls(media: videos[selectedSlot],
+                    onInteraction: { interaction += 1 },
+                    onEditing: { editing = $0; interaction += 1 })
+                    .id(selectedSlot)
+                    .transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black)
+        .foregroundStyle(.white)
+        .tint(.white)
+        .buttonStyle(.plain)
+        .statusBarHidden(true)
+        .persistentSystemOverlays(.hidden)
         .accessibilityIdentifier("p5-fullscreen-viewer")
+        .task(id: interaction) {
+            guard controlsVisible, !editing else { return }
+            do {
+                try await Task.sleep(nanoseconds: 4_000_000_000)
+                guard !Task.isCancelled, !editing else { return }
+                withAnimation(.easeInOut(duration: 0.2)) { controlsVisible = false }
+            } catch { }
+        }
+    }
+
+    private func toggleControls() {
+        withAnimation(.easeInOut(duration: 0.18)) { controlsVisible.toggle() }
+        editing = false
+        interaction += 1
     }
 
     private func selectAdjacent(_ direction: Int) {
         let loaded = loadedVideoIndices
         guard loaded.count > 1, let index = loaded.firstIndex(of: selectedSlot) else { return }
-        let next = (index + direction + loaded.count) % loaded.count
-        changeSelection(to: loaded[next])
+        changeSelection(to: loaded[(index + direction + loaded.count) % loaded.count])
     }
 
     private func changeSelection(to slot: Int) {
         guard videos.indices.contains(slot), videos[slot].hasVideo else { return }
-        onSelectionChange(slot) // Detach wall canvas before attaching fullscreen.
+        editing = false
+        interaction += 1
+        onSelectionChange(slot)
         selectedSlot = slot
     }
 }
 
-/// Observing only the selected model avoids re-rendering the fullscreen surface
-/// at all five other players' progress-update intervals.
 private struct FullScreenPlayerControls: View {
     @ObservedObject var media: MediaMixerViewModel
-    @Environment(\.scenePhase) private var scenePhase
+    let onInteraction: () -> Void
+    let onEditing: (Bool) -> Void
     @State private var dragging = false
     @State private var scrubValue = 0.0
 
     var body: some View {
-        VStack(spacing: 12) {
-            VideoSurface(
-                player: media.player,
-                isForeground: scenePhase == .active,
-                keepAttachedInBackground: false,
-                onCanvasReady: nil
-            )
-            .aspectRatio(16.0 / 9.0, contentMode: .fit)
-            .background(Color.black)
-            .accessibilityIdentifier("p5-fullscreen-video-\(media.slot + 1)")
-
-            HStack(spacing: 10) {
-                Button {
-                    media.seek(to: media.currentSeconds - 10)
-                } label: {
-                    Label("Back 10 seconds", systemImage: "gobackward.10")
+        ZStack {
+            HStack(spacing: 24) {
+                Button { media.seek(to: media.currentSeconds - 10); onInteraction() } label: {
+                    Image(systemName: "gobackward.10").font(.title2).frame(width: 48, height: 48)
                 }
+                .accessibilityLabel("Back 10 seconds")
                 .accessibilityIdentifier("p5-fullscreen-back10")
-                Spacer()
-                Button {
-                    media.togglePlayback()
-                } label: {
-                    Label(media.isPlaying ? "Pause" : "Play",
-                          systemImage: media.isPlaying ? "pause.fill" : "play.fill")
+                Button { media.togglePlayback(); onInteraction() } label: {
+                    Image(systemName: media.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.largeTitle).frame(width: 58, height: 58)
                 }
+                .accessibilityLabel(media.isPlaying ? "Pause" : "Play")
                 .accessibilityIdentifier("p5-fullscreen-transport")
-                Spacer()
-                Button {
-                    media.seek(to: media.currentSeconds + 10)
-                } label: {
-                    Label("Forward 10 seconds", systemImage: "goforward.10")
+                Button { media.seek(to: media.currentSeconds + 10); onInteraction() } label: {
+                    Image(systemName: "goforward.10").font(.title2).frame(width: 48, height: 48)
                 }
+                .accessibilityLabel("Forward 10 seconds")
                 .accessibilityIdentifier("p5-fullscreen-forward10")
             }
-            .buttonStyle(.bordered)
+            .padding(8)
+            .background(Color.black.opacity(0.42), in: Capsule())
             .disabled(!media.hasVideo)
 
-            if media.canSeek {
-                Slider(
-                    value: Binding(
+            VStack(spacing: 2) {
+                if media.canSeek {
+                    Slider(value: Binding(
                         get: { dragging ? scrubValue : media.currentSeconds },
-                        set: { scrubValue = $0 }
-                    ),
-                    in: 0...max(1, media.durationSeconds),
-                    onEditingChanged: { editing in
-                        if editing { scrubValue = media.currentSeconds }
-                        else { media.seek(to: scrubValue) }
-                        dragging = editing
-                    }
-                )
-                .accessibilityLabel("Fullscreen Video \(media.slot + 1) timeline")
-                .accessibilityIdentifier("p5-fullscreen-scrub")
-                HStack {
-                    Text(MediaMixerViewModel.formatTimestamp(
-                        dragging ? scrubValue : media.currentSeconds))
-                    Spacer()
+                        set: { scrubValue = $0 }),
+                        in: 0...max(1, media.durationSeconds),
+                        onEditingChanged: { editing in
+                            if editing { scrubValue = media.currentSeconds }
+                            else { media.seek(to: scrubValue) }
+                            dragging = editing
+                            onEditing(editing)
+                        })
+                    .accessibilityLabel("Fullscreen Video \(media.slot + 1) timeline")
+                    .accessibilityIdentifier("p5-fullscreen-scrub")
+                }
+                HStack(spacing: 8) {
+                    Text(MediaMixerViewModel.formatTimestamp(dragging ? scrubValue : media.currentSeconds))
+                    Text("/")
                     Text(MediaMixerViewModel.formatTimestamp(media.durationSeconds))
+                    Spacer(minLength: 8)
+                    Image(systemName: "speaker.wave.2.fill")
+                    Slider(value: $media.volume, in: 0...1, onEditingChanged: onEditing)
+                        .frame(maxWidth: 130)
+                        .onChange(of: media.volume) { _ in media.applyVolume(); onInteraction() }
+                        .accessibilityLabel("Fullscreen Video \(media.slot + 1) volume")
                 }
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
             }
-
-            HStack {
-                Image(systemName: "speaker.wave.2.fill")
-                Slider(value: $media.volume, in: 0...1)
-                    .onChange(of: media.volume) { _ in media.applyVolume() }
-                    .accessibilityLabel("Fullscreen Video \(media.slot + 1) volume")
-            }
-            Text(media.fileName)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .frame(maxWidth: 650)
+            .background(Color.black.opacity(0.48), in: RoundedRectangle(cornerRadius: 18))
+            .frame(maxHeight: .infinity, alignment: .bottom)
+            .padding(.horizontal, 8)
         }
-        .padding(.horizontal)
     }
 }
 
@@ -1738,6 +1751,7 @@ struct VideoSurface: UIViewRepresentable {
     let isForeground: Bool
     let keepAttachedInBackground: Bool
     let onCanvasReady: ((PlayerCanvas) -> Void)?
+    var videoGravity: AVLayerVideoGravity = .resizeAspect
 
     func makeUIView(context: Context) -> PlayerCanvas {
         PlayerCanvas()
@@ -1748,6 +1762,7 @@ struct VideoSurface: UIViewRepresentable {
         // finishes moving its frames into the floating window.
         view.updatePresentation(
             player: player, isForeground: isForeground || keepAttachedInBackground)
+        view.playerLayer.videoGravity = videoGravity
         onCanvasReady?(view)
     }
 }
