@@ -38,8 +38,9 @@ final class SystemAudioSession: AudioSessionControlling {
         PsychoacousticOutputPolicy.supportedExternalOutput(session)
     }
     func configureForMixedPlayback() throws {
-        try session.setCategory(.playback, mode: .default,
-                                options: [.mixWithOthers, .allowBluetoothA2DP])
+        // Playback already enables Bluetooth A2DP routing on iOS.
+        // Explicit A2DP options for input-capable categories can fail with -50.
+        try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
     }
     func activate() throws { try session.setActive(true) }
     func deactivate() throws { try session.setActive(false, options: [.notifyOthersOnDeactivation]) }
