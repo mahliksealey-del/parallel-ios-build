@@ -92,7 +92,7 @@ final class MediaMixerViewModel: ObservableObject, AudioPlaybackSource {
     private var itemToken = UUID()
 
     init(coordinator: AudioSessionCoordinator, slot: Int = 0) {
-        precondition((0..<3).contains(slot), "MediaMixer supports only slots 0, 1, and 2.")
+        precondition((0..<5).contains(slot), "MediaMixer supports five independent video slots.")
         self.slot = slot
         self.sourceID = .media(slot)
         self.coordinator = coordinator
@@ -114,7 +114,7 @@ final class MediaMixerViewModel: ObservableObject, AudioPlaybackSource {
     }
 
     // Seek only this player's timeline; leave coordinator source intent and
-    // the other two independent AVPlayers untouched.
+    // the other four independent AVPlayers untouched.
     func seek(to seconds: Double) {
         guard let player,
               let target = Self.validatedSeekTime(seconds, duration: durationSeconds) else { return }

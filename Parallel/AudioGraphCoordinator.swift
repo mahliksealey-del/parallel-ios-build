@@ -17,7 +17,7 @@ protocol AudioGraphControlling: AudioPlaybackSource {
     var onConfigurationChange: (() -> Void)? { get set }
 }
 
-/// One shared AVAudioEngine for generated PCM; three AVPlayers are system-managed.
+/// One shared AVAudioEngine for generated PCM; five AVPlayers are system-managed.
 /// Each generated source attaches its own source and gain mixer. Stopping the
 /// metronome does NOT stop the psychoacoustic source, and vice versa.
 @MainActor
@@ -86,7 +86,7 @@ final class AudioGraphCoordinator: AudioGraphControlling {
     ) throws {
         guard !psychoacousticActive else { return }
         // Verify again immediately before arming the atomic audio gate.
-        guard PsychoacousticOutputPolicy.stereoHeadphonesAvailable() else {
+        guard PsychoacousticOutputPolicy.supportedExternalOutput() else {
             throw PsychoacousticAudioError.headphonesRequired
         }
         let graph = try ensureGraph(sampleRate: sampleRate)

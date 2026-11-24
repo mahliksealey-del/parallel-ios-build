@@ -14,6 +14,7 @@ protocol AudioSessionControlling: AnyObject {
     var ioBufferDuration: TimeInterval { get }
     var outputNames: [String] { get }
     var hasStereoHeadphoneOutput: Bool { get }
+    var hasSupportedPsychoacousticOutput: Bool { get }
     func configureForMixedPlayback() throws
     func activate() throws
     func deactivate() throws
@@ -21,6 +22,7 @@ protocol AudioSessionControlling: AnyObject {
 
 extension AudioSessionControlling {
     var hasStereoHeadphoneOutput: Bool { false }
+    var hasSupportedPsychoacousticOutput: Bool { hasStereoHeadphoneOutput }
 }
 
 final class SystemAudioSession: AudioSessionControlling {
@@ -32,8 +34,12 @@ final class SystemAudioSession: AudioSessionControlling {
     var hasStereoHeadphoneOutput: Bool {
         PsychoacousticOutputPolicy.stereoHeadphonesAvailable(session)
     }
+    var hasSupportedPsychoacousticOutput: Bool {
+        PsychoacousticOutputPolicy.supportedExternalOutput(session)
+    }
     func configureForMixedPlayback() throws {
-        try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        try session.setCategory(.playback, mode: .default,
+                                options: [.mixWithOthers, .allowBluetoothA2DP])
     }
     func activate() throws { try session.setActive(true) }
     func deactivate() throws { try session.setActive(false, options: [.notifyOthersOnDeactivation]) }
@@ -48,7 +54,7 @@ enum AudioSourceID: Hashable {
         switch self {
         case .metronome: return 0
         case .media(let slot): return slot + 1
-        case .psychoacoustic: return 4
+        case .psychoacoustic: return 6
         }
     }
 }
@@ -78,6 +84,7 @@ final class AudioSessionCoordinator {
     private var sources: [AudioSourceID: AudioPlaybackSource]
     private(set) var requestedSources: Set<AudioSourceID> = []
     private var sessionActivated = false
+    private var lastHadExternalOutput = false
     private(set) var state: AudioCoordinatorState = .inactive { didSet { onStateChange?(state) } }
     private(set) var route: AudioRouteSnapshot?
     var userRequestedPlayback: Bool { requestedSources.contains(.metronome) }
@@ -215,12 +222,19 @@ final class AudioSessionCoordinator {
     }
 
     func routeChanged() {
+        // Not every Bluetooth loss arrives as .oldDeviceUnavailable (some
+        // cars hand off through multiple route-change notifications). A
+        // transition from an external device to the phone speaker must stop
+        // ALL sources, without auto-resume when a device reconnects.
+        let hadExternal = lastHadExternalOutput
         refreshRoute()
+        if hadExternal && !session.hasSupportedPsychoacousticOutput {
+            outputDeviceWasRemoved()
+            return
+        }
         if requestedSources.contains(.psychoacoustic)
-           && !session.hasStereoHeadphoneOutput {
-            stopPlayback(for: .psychoacoustic)
-            onSourceError?(.psychoacoustic,
-                PsychoacousticAudioError.headphonesRequired.localizedDescription)
+            && !session.hasSupportedPsychoacousticOutput {
+            outputDeviceWasRemoved()
         }
     }
 
@@ -307,6 +321,7 @@ final class AudioSessionCoordinator {
             outputs: session.outputNames
         )
         route = snapshot
+        lastHadExternalOutput = session.hasSupportedPsychoacousticOutput
         onRouteChange?(snapshot)
     }
 

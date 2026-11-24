@@ -558,7 +558,7 @@ final class PsychoacousticViewModel: ObservableObject, AudioPlaybackSource {
 
     func start(sampleRate: Double) throws {
         guard parametersAreValid else { throw PsychoacousticAudioError.invalidParameters }
-        guard PsychoacousticOutputPolicy.stereoHeadphonesAvailable() else {
+        guard PsychoacousticOutputPolicy.supportedExternalOutput() else {
             throw PsychoacousticAudioError.headphonesRequired
         }
         try graph.startPsychoacoustic(

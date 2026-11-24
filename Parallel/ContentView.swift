@@ -20,9 +20,12 @@ struct ContentView: View {
     @State private var isDraggingPsychoGain = false
     // First-party channel trim is independent of the original per-source controls.
     @State private var showingMiniMixer = false
+    @State private var extraVideosExpanded = false
+    @State private var fullScreenSelection: VideoFocusSelection?
+    @State private var fullScreenDisplayingSlot: Int?
     @State private var metronomeExpanded = false
     @State private var psychoExpanded = false
-    @State private var channelTrims: [Double] = Array(repeating: 1, count: 5)
+    @State private var channelTrims: [Double] = Array(repeating: 1, count: 7)
     @State private var mutedChannels: Set<Int> = []
     @State private var soloChannels: Set<Int> = []
 
@@ -31,16 +34,59 @@ struct ContentView: View {
             Form {
                 Section("Video wall · MediaMixer") {
                     VStack(spacing: 12) {
-                        // Always show all three live displays together when
-                        // Parallel is active. Video 1 is reserved for future PiP.
-                        MediaSlotCard(media: videos[0], pip: pip, foreground: scenePhase == .active,
-                                      compact: false)
+                        MediaSlotCard(
+                            media: videos[0], pip: pip,
+                            foreground: scenePhase == .active,
+                            fullScreenActiveSlot: fullScreenDisplayingSlot,
+                            compact: false,
+                            onFullScreen: { slot in fullScreenDisplayingSlot = slot; fullScreenSelection = VideoFocusSelection(slot: slot) }
+                        )
                         HStack(alignment: .top, spacing: 10) {
-                            MediaSlotCard(media: videos[1], pip: pip, foreground: scenePhase == .active,
-                                          compact: true)
-                            MediaSlotCard(media: videos[2], pip: pip, foreground: scenePhase == .active,
-                                          compact: true)
+                            MediaSlotCard(
+                                media: videos[1], pip: pip,
+                                foreground: scenePhase == .active,
+                                fullScreenActiveSlot: fullScreenDisplayingSlot,
+                                compact: true,
+                                onFullScreen: { slot in fullScreenDisplayingSlot = slot; fullScreenSelection = VideoFocusSelection(slot: slot) }
+                            )
+                            MediaSlotCard(
+                                media: videos[2], pip: pip,
+                                foreground: scenePhase == .active,
+                                fullScreenActiveSlot: fullScreenDisplayingSlot,
+                                compact: true,
+                                onFullScreen: { slot in fullScreenDisplayingSlot = slot; fullScreenSelection = VideoFocusSelection(slot: slot) }
+                            )
                         }
+                        DisclosureGroup(isExpanded: $extraVideosExpanded) {
+                            HStack(alignment: .top, spacing: 10) {
+                                MediaSlotCard(
+                                    media: videos[3], pip: pip,
+                                    foreground: scenePhase == .active,
+                                    fullScreenActiveSlot: fullScreenDisplayingSlot,
+                                    compact: true,
+                                    onFullScreen: { slot in fullScreenDisplayingSlot = slot; fullScreenSelection = VideoFocusSelection(slot: slot) }
+                                )
+                                MediaSlotCard(
+                                    media: videos[4], pip: pip,
+                                    foreground: scenePhase == .active,
+                                    fullScreenActiveSlot: fullScreenDisplayingSlot,
+                                    compact: true,
+                                    onFullScreen: { slot in fullScreenDisplayingSlot = slot; fullScreenSelection = VideoFocusSelection(slot: slot) }
+                                )
+                            }
+                            Text("Videos 4 and 5 can keep playing even while this section is collapsed.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        } label: {
+                            HStack {
+                                Label("Extra videos · 4 & 5", systemImage: "rectangle.stack")
+                                Spacer()
+                                Text("Optional")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .accessibilityIdentifier("parallel-extra-videos-accordion")
                     }
                     .frame(maxWidth: .infinity)
                 }
@@ -52,7 +98,7 @@ struct ContentView: View {
                         Label("Mini Mixer", systemImage: "slider.horizontal.3")
                     }
                     .accessibilityIdentifier("parallel-mini-mixer")
-                    Text("Optional five-source controls. The original video wall stays unchanged.")
+                    Text("Seven independent Parallel audio sources: five videos, metronome and psychoacoustics.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -310,11 +356,19 @@ struct ContentView: View {
             .onChange(of: psychoacoustic.pinkNoise) { _ in psychoacoustic.applyLayers() }
             .onChange(of: psychoacoustic.brownNoise) { _ in psychoacoustic.applyLayers() }
             .navigationTitle("Parallel")
+            .fullScreenCover(item: $fullScreenSelection, onDismiss: {
+                fullScreenDisplayingSlot = nil
+            }) { selection in
+                FullScreenVideoViewer(
+                    videos: videos, selectedSlot: selection.slot,
+                    onSelectionChange: { next in fullScreenDisplayingSlot = next }
+                )
+            }
             .sheet(isPresented: $showingMiniMixer) {
                 NavigationStack {
                     Form {
                         Section("Parallel-owned audio") {
-                            ForEach(0..<5, id: \.self) { index in
+                            ForEach(0..<7, id: \.self) { index in
                                 VStack(alignment: .leading, spacing: 7) {
                                     HStack {
                                         Text(Self.channelName(index)).font(.headline)
@@ -367,7 +421,7 @@ struct ContentView: View {
                                 .foregroundStyle(.secondary)
                         }
                         Section {
-                            Text("These controls affect only Parallel's three videos, metronome and generated stereo psychoacoustics. No third-party app volume or unmeasured master level is represented.")
+                            Text("These controls affect only Parallel's five videos, metronome and generated psychoacoustics. No third-party app volume or unmeasured master level is represented.")
                                 .font(.footnote)
                         }
                     }
@@ -385,10 +439,8 @@ struct ContentView: View {
 
     private static func channelName(_ index: Int) -> String {
         switch index {
-        case 0: return "Video 1"
-        case 1: return "Video 2"
-        case 2: return "Video 3"
-        case 3: return "Metronome"
+        case 0..<5: return "Video \(index + 1)"
+        case 5: return "Metronome"
         default: return "Psychoacoustic (tone + noise)"
         }
     }
@@ -397,13 +449,13 @@ struct ContentView: View {
         let levels = MiniMixerRouting.outputLevels(
             trims: channelTrims, muted: mutedChannels, solo: soloChannels
         )
-        for index in 0..<3 {
+        for index in videos.indices {
             videos[index].mixerLevel = levels[index]
             videos[index].applyVolume()
         }
-        model.mixerLevel = levels[3]
+        model.mixerLevel = levels[5]
         model.applyGain()
-        psychoacoustic.setMixerLevel(levels[4])
+        psychoacoustic.setMixerLevel(levels[6])
     }
 
     private static func formatCountdown(_ seconds: TimeInterval) -> String {
@@ -1313,7 +1365,7 @@ enum ParallelCountdownFormatter {
 /// Pure first-party mixer state reducer, independent of AVPlayer/AVAudioEngine.
 enum MiniMixerRouting {
     static func outputLevels(trims: [Double], muted: Set<Int>, solo: Set<Int>) -> [Double] {
-        guard trims.count == 5 else { return Array(repeating: 0, count: 5) }
+        guard trims.count == 7 else { return Array(repeating: 0, count: 7) }
         return trims.enumerated().map { index, trim in
             guard trim.isFinite, (0...1).contains(trim) else { return 0 }
             return muted.contains(index) || (!solo.isEmpty && !solo.contains(index))
@@ -1325,11 +1377,207 @@ enum MiniMixerRouting {
 // Separate @State for every Files picker, and separate @ObservedObject for
 // every AVPlayer. Neither file replacement nor transport in one tile changes
 // the player, intent, or slider values of its siblings.
+// Fullscreen uses the ORIGINAL slot's AVPlayer, never a duplicate player.
+// Changing the displayed slot is a view selection, not a transport command:
+// other video audio, psychoacoustics and the metronome keep running.
+struct VideoFocusSelection: Identifiable, Equatable {
+    let slot: Int
+    var id: Int { slot }
+}
+
+private struct FullScreenVideoViewer: View {
+    let videos: [MediaMixerViewModel]
+    let onSelectionChange: (Int) -> Void
+    @State private var selectedSlot: Int
+    @Environment(\.dismiss) private var dismiss
+
+    init(videos: [MediaMixerViewModel], selectedSlot: Int,
+         onSelectionChange: @escaping (Int) -> Void) {
+        self.videos = videos
+        self.onSelectionChange = onSelectionChange
+        _selectedSlot = State(initialValue: selectedSlot)
+    }
+
+    private var loadedVideoIndices: [Int] {
+        videos.indices.filter { videos[$0].hasVideo }
+    }
+
+    var body: some View {
+        VStack(spacing: 14) {
+            HStack {
+                Text("Video \(selectedSlot + 1) · Full Screen")
+                    .font(.headline)
+                    .lineLimit(1)
+                Spacer(minLength: 5)
+                Button {
+                    dismiss()
+                } label: {
+                    Label("Close", systemImage: "arrow.down.right.and.arrow.up.left")
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("p5-fullscreen-close")
+            }
+            .padding(.horizontal)
+
+            FullScreenPlayerControls(media: videos[selectedSlot])
+                .id(selectedSlot)
+                .frame(maxWidth: .infinity)
+
+            HStack {
+                Button {
+                    selectAdjacent(-1)
+                } label: {
+                    Label("Previous video", systemImage: "chevron.left")
+                }
+                .disabled(loadedVideoIndices.count < 2)
+                Spacer()
+                Text("Switch the picture, not the playback")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    selectAdjacent(1)
+                } label: {
+                    Label("Next video", systemImage: "chevron.right")
+                }
+                .disabled(loadedVideoIndices.count < 2)
+            }
+            .buttonStyle(.bordered)
+            .padding(.horizontal)
+            .accessibilityIdentifier("p5-fullscreen-prev-next")
+
+            HStack(spacing: 7) {
+                ForEach(videos.indices, id: \.self) { index in
+                    Button("V\(index + 1)") {
+                        changeSelection(to: index)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(selectedSlot == index ? Color.accentColor : Color.secondary)
+                    .disabled(!videos[index].hasVideo)
+                    .frame(maxWidth: .infinity)
+                    .accessibilityLabel("Show Video \(index + 1) in full screen")
+                    .accessibilityIdentifier("p5-fullscreen-select-\(index + 1)")
+                }
+            }
+            .padding(.horizontal)
+            Spacer(minLength: 0)
+            Text("Each video keeps its own audio, position, volume and playback state. PiP remains on Video 1.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
+        }
+        .padding(.top, 12)
+        .background(Color(.systemBackground))
+        .accessibilityIdentifier("p5-fullscreen-viewer")
+    }
+
+    private func selectAdjacent(_ direction: Int) {
+        let loaded = loadedVideoIndices
+        guard loaded.count > 1, let index = loaded.firstIndex(of: selectedSlot) else { return }
+        let next = (index + direction + loaded.count) % loaded.count
+        changeSelection(to: loaded[next])
+    }
+
+    private func changeSelection(to slot: Int) {
+        guard videos.indices.contains(slot), videos[slot].hasVideo else { return }
+        onSelectionChange(slot) // Detach wall canvas before attaching fullscreen.
+        selectedSlot = slot
+    }
+}
+
+/// Observing only the selected model avoids re-rendering the fullscreen surface
+/// at all five other players' progress-update intervals.
+private struct FullScreenPlayerControls: View {
+    @ObservedObject var media: MediaMixerViewModel
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var dragging = false
+    @State private var scrubValue = 0.0
+
+    var body: some View {
+        VStack(spacing: 12) {
+            VideoSurface(
+                player: media.player,
+                isForeground: scenePhase == .active,
+                keepAttachedInBackground: false,
+                onCanvasReady: nil
+            )
+            .aspectRatio(16.0 / 9.0, contentMode: .fit)
+            .background(Color.black)
+            .accessibilityIdentifier("p5-fullscreen-video-\(media.slot + 1)")
+
+            HStack(spacing: 10) {
+                Button {
+                    media.seek(to: media.currentSeconds - 10)
+                } label: {
+                    Label("Back 10 seconds", systemImage: "gobackward.10")
+                }
+                .accessibilityIdentifier("p5-fullscreen-back10")
+                Spacer()
+                Button {
+                    media.togglePlayback()
+                } label: {
+                    Label(media.isPlaying ? "Pause" : "Play",
+                          systemImage: media.isPlaying ? "pause.fill" : "play.fill")
+                }
+                .accessibilityIdentifier("p5-fullscreen-transport")
+                Spacer()
+                Button {
+                    media.seek(to: media.currentSeconds + 10)
+                } label: {
+                    Label("Forward 10 seconds", systemImage: "goforward.10")
+                }
+                .accessibilityIdentifier("p5-fullscreen-forward10")
+            }
+            .buttonStyle(.bordered)
+            .disabled(!media.hasVideo)
+
+            if media.canSeek {
+                Slider(
+                    value: Binding(
+                        get: { dragging ? scrubValue : media.currentSeconds },
+                        set: { scrubValue = $0 }
+                    ),
+                    in: 0...max(1, media.durationSeconds),
+                    onEditingChanged: { editing in
+                        if editing { scrubValue = media.currentSeconds }
+                        else { media.seek(to: scrubValue) }
+                        dragging = editing
+                    }
+                )
+                .accessibilityLabel("Fullscreen Video \(media.slot + 1) timeline")
+                .accessibilityIdentifier("p5-fullscreen-scrub")
+                HStack {
+                    Text(MediaMixerViewModel.formatTimestamp(
+                        dragging ? scrubValue : media.currentSeconds))
+                    Spacer()
+                    Text(MediaMixerViewModel.formatTimestamp(media.durationSeconds))
+                }
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Image(systemName: "speaker.wave.2.fill")
+                Slider(value: $media.volume, in: 0...1)
+                    .onChange(of: media.volume) { _ in media.applyVolume() }
+                    .accessibilityLabel("Fullscreen Video \(media.slot + 1) volume")
+            }
+            Text(media.fileName)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal)
+    }
+}
+
 private struct MediaSlotCard: View {
     @ObservedObject var media: MediaMixerViewModel
     @ObservedObject var pip: VideoPiPCoordinator
     let foreground: Bool
+    let fullScreenActiveSlot: Int?
     let compact: Bool
+    let onFullScreen: (Int) -> Void
     @State private var showingFileImporter = false
     @State private var isScrubbing = false
     @State private var scrubPosition = 0.0
@@ -1347,7 +1595,7 @@ private struct MediaSlotCard: View {
 
             VideoSurface(
                 player: media.player,
-                isForeground: foreground,
+                isForeground: foreground && fullScreenActiveSlot != media.slot,
                 keepAttachedInBackground: media.slot == 0 && pip.shouldKeepLayerAttached,
                 onCanvasReady: media.slot == 0 ? { canvas in pip.attach(to: canvas) } : nil
             )
@@ -1408,21 +1656,31 @@ private struct MediaSlotCard: View {
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.secondary)
             }
-            if media.slot == 0 {
+            HStack(spacing: 7) {
+                if media.slot == 0 {
+                    Button {
+                        pip.toggle(for: media)
+                    } label: {
+                        Label(pip.isActive ? "Close PiP" : "Start PiP",
+                              systemImage: "pip.enter")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!media.hasVideo || !pip.isSupported)
+                    .accessibilityIdentifier("media-pip-1")
+                }
                 Button {
-                    pip.toggle(for: media)
+                    onFullScreen(media.slot)
                 } label: {
-                    Label(pip.isActive ? "Close PiP" : "Start PiP",
-                          systemImage: "pip.enter")
+                    Label("Full Screen", systemImage: "arrow.up.left.and.arrow.down.right")
                 }
                 .buttonStyle(.bordered)
-                .disabled(!media.hasVideo || !pip.isSupported)
-                .accessibilityIdentifier("media-pip-1")
-                if let pipError = pip.errorMessage {
-                    Text(pipError)
-                        .font(.caption2)
-                        .foregroundStyle(.red)
-                }
+                .disabled(!media.hasVideo || (media.slot == 0 && (pip.isActive || pip.isStarting)))
+                .accessibilityIdentifier("p5-fullscreen-open-\(media.slot + 1)")
+            }
+            if media.slot == 0, let pipError = pip.errorMessage {
+                Text(pipError)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
             }
 
             HStack(spacing: 4) {

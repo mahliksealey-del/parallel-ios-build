@@ -19,13 +19,13 @@ final class ParallelTests: XCTestCase {
         XCTAssertFalse(container.session.register(FakeSource(), for: .media(0)))
     }
 
-    func testContainerOwnsExactlyThreeRegisteredSlots() {
+    func testContainerOwnsExactlyFiveRegisteredSlots() {
         let container = ParallelAudioContainer()
-        XCTAssertEqual(container.videos.count, 3)
-        XCTAssertEqual(container.videos.map(\.slot), [0, 1, 2])
+        XCTAssertEqual(container.videos.count, 5)
+        XCTAssertEqual(container.videos.map(\.slot), [0, 1, 2, 3, 4])
         XCTAssertTrue(container.media === container.videos[0])
-        XCTAssertEqual(Set(container.videos.map(\.slot)).count, 3)
-        for index in 0..<3 {
+        XCTAssertEqual(Set(container.videos.map(\.slot)).count, 5)
+        for index in 0..<5 {
             XCTAssertFalse(container.session.register(FakeSource(), for: .media(index)))
         }
         XCTAssertTrue(container.session.requestedSources.isEmpty)
@@ -114,23 +114,118 @@ final class ParallelTests: XCTestCase {
         XCTAssertEqual(container.videos[2].errorMessage, "Video 3 failure")
     }
 
-    func testAllThreeVideoSurfacesDetachIndependentlyInBackground() {
-        let canvases = (0..<3).map { _ in PlayerCanvas(frame: .zero) }
-        let players = (0..<3).map { _ in AVPlayer() }
-        for index in 0..<3 {
+    func testAllFiveVideoSurfacesDetachIndependentlyInBackground() {
+        let canvases = (0..<5).map { _ in PlayerCanvas(frame: .zero) }
+        let players = (0..<5).map { _ in AVPlayer() }
+        for index in 0..<5 {
             MediaMixerViewModel.configureForBackgroundPlayback(players[index])
             XCTAssertEqual(players[index].audiovisualBackgroundPlaybackPolicy, .continuesIfPossible)
             canvases[index].updatePresentation(player: players[index], isForeground: true)
             XCTAssertTrue(canvases[index].playerLayer.player === players[index])
         }
-        for index in 0..<3 {
+        for index in 0..<5 {
             canvases[index].updatePresentation(player: players[index], isForeground: false)
             XCTAssertNil(canvases[index].playerLayer.player)
         }
-        for index in 0..<3 {
+        for index in 0..<5 {
             canvases[index].updatePresentation(player: players[index], isForeground: true)
             XCTAssertTrue(canvases[index].playerLayer.player === players[index])
         }
+    }
+
+    func testFiveVideoSourcesMetronomeAndPsychoAreIndependentlyRegistered() {
+        let f = makeFixture()
+        let players = (0..<5).map { _ in FakeSource() }
+        for i in 0..<5 {
+            XCTAssertTrue(f.coordinator.register(players[i], for: .media(i)))
+        }
+        let psycho = FakeSource()
+        XCTAssertTrue(f.coordinator.register(psycho, for: .psychoacoustic))
+        f.coordinator.start()
+        for i in 0..<5 { f.coordinator.requestPlayback(for: .media(i)) }
+        f.coordinator.requestPlayback(for: .psychoacoustic)
+        XCTAssertEqual(f.coordinator.requestedSources.count, 7)
+        XCTAssertEqual(f.session.configureCount, 1)
+        XCTAssertEqual(f.session.activateCount, 1)
+        XCTAssertEqual(players.map(\.startCount), [1, 1, 1, 1, 1])
+        XCTAssertEqual(psycho.startCount, 1)
+        f.coordinator.stopPlayback(for: .media(4))
+        XCTAssertEqual(players[4].stopCount, 1)
+        XCTAssertEqual(players[0].stopCount, 0)
+        XCTAssertEqual(psycho.stopCount, 0)
+        XCTAssertEqual(f.graph.stopCount, 0)
+        XCTAssertEqual(f.session.deactivateCount, 0)
+    }
+
+    func testAllFiveVideosPsychoAndMetronomeStopOnBluetoothRemoval() {
+        let f = makeFixture()
+        let players = (0..<5).map { _ in FakeSource() }
+        for i in 0..<5 {
+            XCTAssertTrue(f.coordinator.register(players[i], for: .media(i)))
+            f.coordinator.requestPlayback(for: .media(i))
+        }
+        let psycho = FakeSource()
+        XCTAssertTrue(f.coordinator.register(psycho, for: .psychoacoustic))
+        f.coordinator.requestPlayback(for: .psychoacoustic)
+        f.coordinator.start()
+        f.coordinator.outputDeviceWasRemoved()
+        XCTAssertTrue(f.coordinator.requestedSources.isEmpty)
+        XCTAssertEqual(players.map(\.stopCount), [1, 1, 1, 1, 1])
+        XCTAssertEqual(psycho.stopCount, 1)
+        XCTAssertEqual(f.graph.stopCount, 1)
+        XCTAssertEqual(f.session.deactivateCount, 1)
+        // Reconnecting never auto-starts any source.
+        f.session.hasSupportedPsychoacousticOutput = true
+        f.coordinator.routeChanged()
+        XCTAssertTrue(f.coordinator.requestedSources.isEmpty)
+    }
+
+    func testBluetoothRouteFallbackToSpeakerStopsEveryActiveSource() {
+        let f = makeFixture()
+        let video = FakeSource()
+        let psycho = FakeSource()
+        XCTAssertTrue(f.coordinator.register(video, for: .media(4)))
+        XCTAssertTrue(f.coordinator.register(psycho, for: .psychoacoustic))
+        f.coordinator.requestPlayback(for: .media(4))
+        f.coordinator.requestPlayback(for: .psychoacoustic)
+        XCTAssertEqual(f.session.activateCount, 1)
+        // Simulate routes that don't label the change as oldDeviceUnavailable.
+        f.session.hasSupportedPsychoacousticOutput = false
+        f.coordinator.routeChanged()
+        XCTAssertTrue(f.coordinator.requestedSources.isEmpty)
+        XCTAssertEqual(video.stopCount, 1)
+        XCTAssertEqual(psycho.stopCount, 1)
+        XCTAssertEqual(f.session.deactivateCount, 1)
+    }
+
+    func testBluetoothCarAndMonoRoutesCanGenerateAudioWithoutHeadphoneClaim() {
+        XCTAssertTrue(PsychoacousticOutputPolicy.supportsExternalRoute(
+            portTypes: [.bluetoothA2DP], outputChannels: 2))
+        XCTAssertTrue(PsychoacousticOutputPolicy.supportsExternalRoute(
+            portTypes: [.bluetoothHFP], outputChannels: 1))
+        XCTAssertTrue(PsychoacousticOutputPolicy.supportsExternalRoute(
+            portTypes: [.bluetoothLE], outputChannels: 1))
+        XCTAssertTrue(PsychoacousticOutputPolicy.supportsExternalRoute(
+            portTypes: [.carAudio], outputChannels: 2))
+        XCTAssertTrue(PsychoacousticOutputPolicy.supportsExternalRoute(
+            portTypes: [.headphones], outputChannels: 2))
+        XCTAssertFalse(PsychoacousticOutputPolicy.supportsExternalRoute(
+            portTypes: [.builtInSpeaker], outputChannels: 2))
+        XCTAssertFalse(PsychoacousticOutputPolicy.supportsExternalRoute(
+            portTypes: [.bluetoothA2DP], outputChannels: 0))
+        XCTAssertFalse(PsychoacousticOutputPolicy.supportsExternalRoute(
+            portTypes: [], outputChannels: 2))
+    }
+
+    func testFullscreenSelectionAndFiveSlotsDoNotActivateAudio() {
+        let f = makeFixture()
+        let slots = (0..<5).map { MediaMixerViewModel(coordinator: f.coordinator, slot: $0) }
+        let focus = VideoFocusSelection(slot: 4)
+        XCTAssertEqual(focus.id, 4)
+        XCTAssertEqual(slots.map(\.slot), [0, 1, 2, 3, 4])
+        XCTAssertTrue(slots.allSatisfy { !$0.hasVideo })
+        XCTAssertTrue(f.coordinator.requestedSources.isEmpty)
+        XCTAssertEqual(f.session.activateCount, 0)
     }
 
     func testMediaMixerRequiresImportedFileBeforePlayback() {
@@ -663,20 +758,22 @@ final class ParallelTests: XCTestCase {
 
     func testMixerRoutingMuteSoloAndFiniteTrims() {
         let levels = MiniMixerRouting.outputLevels(
-            trims: [0.2, 0.4, 0.6, 0.8, 1],
-            muted: [1], solo: [0, 1, 4]
+            trims: [0.2, 0.4, 0.6, 0.8, 1, 0.7, 1],
+            muted: [1], solo: [0, 1, 4, 6]
         )
-        XCTAssertEqual(levels, [0.2, 0, 0, 0, 1])
+        XCTAssertEqual(levels, [0.2, 0, 0, 0, 1, 0, 1])
         XCTAssertEqual(
             MiniMixerRouting.outputLevels(
-                trims: [1, .nan, 1, 1, 1], muted: [], solo: []
-            ), [1, 0, 1, 1, 1]
+                trims: [1, .nan, 1, 1, 1, 1, 1], muted: [], solo: []
+            ), [1, 0, 1, 1, 1, 1, 1]
         )
         XCTAssertEqual(
             MiniMixerRouting.outputLevels(
-                trims: [1, 1, 1, 1, 1], muted: [], solo: []
-            ), [1, 1, 1, 1, 1]
+                trims: [1, 1, 1, 1, 1, 1, 1], muted: [], solo: []
+            ), [1, 1, 1, 1, 1, 1, 1]
         )
+        XCTAssertEqual(MiniMixerRouting.outputLevels(trims: [1, 1, 1, 1, 1], muted: [], solo: []),
+                       [0, 0, 0, 0, 0, 0, 0])
     }
 
     func testFadeDurationsAreMonotonicAndKeepExactEndpoints() {
@@ -976,6 +1073,7 @@ private final class FakeSession: AudioSessionControlling {
     var ioBufferDuration = 0.005
     var outputNames = ["Test headphones"]
     var hasStereoHeadphoneOutput = true
+    var hasSupportedPsychoacousticOutput = true
     var configureCount = 0
     var activateCount = 0
     var deactivateCount = 0

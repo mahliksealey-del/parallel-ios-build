@@ -7,7 +7,7 @@ final class ParallelAudioContainer: ObservableObject {
     let session: AudioSessionCoordinator
     let metronome: MetronomeViewModel
     let psychoacoustic: PsychoacousticViewModel
-    // App-owned array keeps three independent AVPlayers alive across scene changes.
+    // App-owned array keeps five independent AVPlayers alive across scene changes.
     // The legacy "media" alias retains Video 1 identity from the validated build.
     let media: MediaMixerViewModel
     let videos: [MediaMixerViewModel]
@@ -22,7 +22,7 @@ final class ParallelAudioContainer: ObservableObject {
                 emergencyRelay.disarmImmediately()
             }
         )
-        let slots = (0..<3).map { index in
+        let slots = (0..<5).map { index in
             MediaMixerViewModel(coordinator: coordinator, slot: index)
         }
 

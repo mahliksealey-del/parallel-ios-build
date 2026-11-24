@@ -40,7 +40,7 @@ enum PsychoacousticAudioError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .headphonesRequired:
-            return "Connect stereo wired or Bluetooth headphones before starting binaural audio."
+            return "Connect wired headphones, a Bluetooth audio device, or car audio. Select the output first, then start the psychoacoustic engine."
         case .unsupportedAudioFormat:
             return "The audio route does not support the required stereo PCM format."
         case .memoryAllocation:
@@ -55,8 +55,12 @@ enum PsychoacousticAudioError: LocalizedError {
     }
 }
 
-/// Exact output-port policy. Port names are not trusted as headphone evidence.
-/// Mono Bluetooth HFP, loudspeaker, AirPlay, HDMI, and unknown routes fail closed.
+/// The original safe policy required headphones and rejected cars/Bluetooth
+/// speakers. Accept explicitly identified external audio devices while still
+/// rejecting silent, unknown, and built-in speaker routes. Headphone removal
+/// continues to disarm all playback through AudioSessionCoordinator.
+/// Binaural *perception* requires channel separation at the ears: in cars or
+/// mono HFP/LE routes the tone still plays, but beat perception is not assured.
 enum PsychoacousticOutputPolicy {
     static func stereoHeadphonesAvailable(_ session: AVAudioSession = .sharedInstance()) -> Bool {
         guard session.outputNumberOfChannels >= 2 else { return false }
@@ -64,10 +68,34 @@ enum PsychoacousticOutputPolicy {
             switch output.portType {
             case .headphones, .bluetoothA2DP, .bluetoothLE:
                 return true
+            default: return false
+            }
+        }
+    }
+
+    static func supportedExternalOutput(_ session: AVAudioSession = .sharedInstance()) -> Bool {
+        supportsExternalRoute(
+            portTypes: session.currentRoute.outputs.map(\.portType),
+            outputChannels: session.outputNumberOfChannels
+        )
+    }
+
+    static func supportsExternalRoute(
+        portTypes: [AVAudioSession.Port], outputChannels: Int
+    ) -> Bool {
+        guard outputChannels >= 1 else { return false }
+        return portTypes.contains { port in
+            switch port {
+            case .headphones, .bluetoothA2DP, .bluetoothHFP, .bluetoothLE, .carAudio:
+                return true
             default:
                 return false
             }
         }
+    }
+
+    static func hasStereoSeparation(_ session: AVAudioSession = .sharedInstance()) -> Bool {
+        stereoHeadphonesAvailable(session)
     }
 }
 
