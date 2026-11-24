@@ -655,21 +655,24 @@ final class ParallelTests: XCTestCase {
         XCTAssertEqual(f.session.deactivateCount, 1)
     }
 
-    func testPsychoacousticRouteChangeFailsClosedWithoutStoppingVideo() {
+    func testChangingStereoHeadphoneToSupportedMonoBluetoothKeepsPlayback() {
         let f = makeFixture()
         let video = FakeSource()
         let psycho = FakeSource()
         XCTAssertTrue(f.coordinator.register(video, for: .media(0)))
         XCTAssertTrue(f.coordinator.register(psycho, for: .psychoacoustic))
         f.session.hasStereoHeadphoneOutput = true
+        f.session.hasSupportedPsychoacousticOutput = true
         f.coordinator.requestPlayback(for: .media(0))
         f.coordinator.requestPlayback(for: .psychoacoustic)
         XCTAssertEqual(psycho.startCount, 1)
+        // Car HFP profile is mono, but still an accepted external output.
+        // Do not incorrectly treat mono format as headphone removal.
         f.session.hasStereoHeadphoneOutput = false
         f.coordinator.routeChanged()
-        XCTAssertFalse(f.coordinator.requestedSources.contains(.psychoacoustic))
+        XCTAssertTrue(f.coordinator.requestedSources.contains(.psychoacoustic))
         XCTAssertTrue(f.coordinator.requestedSources.contains(.media(0)))
-        XCTAssertEqual(psycho.stopCount, 1)
+        XCTAssertEqual(psycho.stopCount, 0)
         XCTAssertEqual(video.stopCount, 0)
         XCTAssertEqual(f.coordinator.state, .active)
         XCTAssertEqual(f.session.deactivateCount, 0)

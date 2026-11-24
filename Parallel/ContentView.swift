@@ -168,7 +168,7 @@ struct ContentView: View {
                 }
                 if psychoExpanded {
                 Section("PsychoacousticEngine") {
-                    Text("Experimental audio synthesis. Stereo headphones required. No medical or performance effects are implied.")
+                    Text("Works with wired headphones, Bluetooth speakers/headsets and car audio. True binaural ear separation requires stereo headphones; car or mono playback may not produce a binaural illusion. No medical effects are implied.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
 
@@ -211,7 +211,7 @@ struct ContentView: View {
                     .onChange(of: psychoacoustic.mode) { _ in psychoacoustic.applyLayers() }
                     .disabled(psychoacoustic.selectedProgram != nil)
                     Text(psychoacoustic.mode == .binaural
-                         ? "Each ear receives a different carrier; stereo headphones are required."
+                         ? "Left/right carriers are separate in stereo. On car speakers or mono Bluetooth, the audio plays but the binaural illusion may not be heard; try monaural or isochronic mode."
                          : psychoacoustic.mode == .monaural
                          ? "Both ears receive the same two-tone amplitude pattern."
                          : "Both ears receive a smoothly gated tone at the selected pulse rate.")
